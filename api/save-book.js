@@ -1,29 +1,71 @@
-# Vercel Runtime Log
+module.exports = async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Notion-Version");
 
-## Request
-ID: mtzz7-1776797973510-07218d444feb
-Time: 2026-04-21T18:59:33.510Z
-POST /api/save-book → 400
-Host: library-scanner-steel.vercel.app
-Duration: 213ms
-Cache: MISS
-Region: cdg1
-User Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0
-Referer: https://library-scanner-steel.vercel.app/
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-## Lifecycle
+  try {
+    let body = req.body;
+    if (!body) return res.status(400).json({ error: "Empty request body. Did you send JSON?" });
 
-### Function
-Status: 400
-Duration: 113ms
-Runtime: nodejs24.x
-Memory: 252MB / 2048MB
-Region: iad1
+    if (typeof body === "string") {
+      try { body = JSON.parse(body); }
+      catch { return res.status(400).json({ error: "Body is not valid JSON" }); }
+    }
 
-## External APIs (1)
-POST api.notion.com/v1/databases/349bbbf581dc805dabf2d72448ddd44e → 400 105ms
+    const { notionToken, databaseId, book } = body;
 
-## Deployment
-ID: dpl_ADzgpteTnTBqzND7SkcZNw2StK2v
-Environment: production
-Branch: main
+    if (!notionToken || !databaseId) {
+      return res.status(400).json({ error: "Missing notionToken or databaseId" });
+    }
+    if (!book || !book.isbn13) {
+      return res.status(400).json({ error: "Missing book or book.isbn13" });
+    }
+
+    const NOTION_VERSION = "2026-03-11";
+
+    // ---- Duplicate check (Notion Query DB) ---- [1](https://appsheettraining.com/article/google-sheets-formulas-vs-appsheet-expressions)
+    const notionQueryUrl = `https://api.notion.com/v1/databases/${databaseId}/query`;
+
+    const queryPayload = {
+      filter: {
+        property: "ISBN-13",                 // <-- cambieremo se Notion dice property not found
+        rich_text: { equals: String(book.isbn13) } // <-- cambieremo se Notion dice filtro non valido
+      },
+      page_size: 1
+    };
+
+    const queryResp = await fetch(notionQueryUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${notionToken}`,  // bearer auth [3](https://sheets-pratique.com/en/apps-script/triggers)
+        "Notion-Version": NOTION_VERSION,          // required version header [3](https://sheets-pratique.com/en/apps-script/triggers)
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(queryPayload)
+    });
+
+    const queryText = await queryResp.text();
+
+    // ✅ LOG DETTAGLIO NOTION (questo è lo step che ci manca)
+    console.log("NOTION QUERY URL:", notionQueryUrl);
+    console.log("NOTION QUERY STATUS:", queryResp.status);
+    console.log("NOTION QUERY BODY:", queryText);
+
+    let queryJson;
+    try { queryJson = JSON.parse(queryText); } catch { queryJson = { raw: queryText }; }
+
+    if (!queryResp.ok) {
+      return res.status(queryResp.status).json({ error: "Notion query failed", details: queryJson });
+    }
+
+    // Se non duplicato, per ora restituiamo OK (così ci concentriamo sulla query)
+    return res.status(200).json({ ok: true, msg: "Query OK, no duplicates found" });
+
+  } catch (err) {
+    console.error("FUNCTION CRASH:", err);
+    return res.status(500).json({ error: "Server crash", details: String(err) });
+  }
+};
