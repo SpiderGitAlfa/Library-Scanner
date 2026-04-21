@@ -30,7 +30,7 @@ module.exports = async (req, res) => {
     cleanDatabaseId = cleanDatabaseId.split("?")[0];
     cleanDatabaseId = cleanDatabaseId.replace(/[^a-zA-Z0-9]/g, ""); // keep only alnum
 
-    const NOTION_VERSION = "2026-03-11";
+    const NOTION_VERSION = "2022-06-28";
 
     // 1) Duplicate check (Query database) [1](https://appsheettraining.com/article/google-sheets-formulas-vs-appsheet-expressions)
     const notionQueryUrl = `https://api.notion.com/v1/databases/${cleanDatabaseId}/query`;
