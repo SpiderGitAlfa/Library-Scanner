@@ -84,17 +84,26 @@ module.exports = async (req, res) => {
     Object.keys(properties).forEach(k => { if (properties[k] === undefined) delete properties[k]; });
 
     const createResp = await fetch("https://api.notion.com/v1/pages", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${notionToken}`,   // Bearer auth [3](https://sheets-pratique.com/en/apps-script/triggers)
-        "Notion-Version": NOTION_VERSION,           // version header [3](https://sheets-pratique.com/en/apps-script/triggers)
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        parent: { database_id: cleanDatabaseId },
-        properties
-      })
-    });
+  method: "POST",
+  headers: {
+    "Authorization": `Bearer ${notionToken}`,
+    "Notion-Version": NOTION_VERSION,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    parent: { database_id: cleanDatabaseId },
+
+    // ✅ QUESTA È LA CHIAVE
+    cover: book.coverUrl
+      ? {
+          type: "external",
+          external: { url: book.coverUrl }
+        }
+      : undefined,
+
+    properties: properties
+  })
+});
 
     const createText = await createResp.text();
     console.log("NOTION CREATE STATUS:", createResp.status);
