@@ -1,101 +1,29 @@
-module.exports = async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Notion-Version");
+# Vercel Runtime Log
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+## Request
+ID: mtzz7-1776797973510-07218d444feb
+Time: 2026-04-21T18:59:33.510Z
+POST /api/save-book → 400
+Host: library-scanner-steel.vercel.app
+Duration: 213ms
+Cache: MISS
+Region: cdg1
+User Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0
+Referer: https://library-scanner-steel.vercel.app/
 
-  try {
-    let body = req.body;
-    if (!body) return res.status(400).json({ error: "Empty request body. Did you send JSON?" });
+## Lifecycle
 
-    if (typeof body === "string") {
-      try { body = JSON.parse(body); }
-      catch { return res.status(400).json({ error: "Body is not valid JSON" }); }
-    }
+### Function
+Status: 400
+Duration: 113ms
+Runtime: nodejs24.x
+Memory: 252MB / 2048MB
+Region: iad1
 
-    const { notionToken, databaseId, book } = body;
+## External APIs (1)
+POST api.notion.com/v1/databases/349bbbf581dc805dabf2d72448ddd44e → 400 105ms
 
-    if (!notionToken || !databaseId) {
-      return res.status(400).json({ error: "Missing notionToken or databaseId" });
-    }
-    if (!book || !book.isbn13) {
-      return res.status(400).json({ error: "Missing book or book.isbn13" });
-    }
-
-    const NOTION_VERSION = "2026-03-11";
-
-    // 1) Duplicate check
-    const queryResp = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${notionToken}`,
-        "Notion-Version": NOTION_VERSION,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        filter: {
-          property: "ISBN-13",
-          rich_text: { equals: String(book.isbn13) }
-        },
-        page_size: 1
-      })
-    });
-
-    const queryText = await queryResp.text();
-    let queryJson;
-    try { queryJson = JSON.parse(queryText); } catch { queryJson = { raw: queryText }; }
-
-    if (!queryResp.ok) {
-      return res.status(queryResp.status).json({ error: "Notion query failed", details: queryJson });
-    }
-
-    if (queryJson.results && queryJson.results.length > 0) {
-      return res.status(200).json({ status: "duplicate", existingPageId: queryJson.results[0].id });
-    }
-
-    // 2) Create page
-    const properties = {
-      "Titolo": { title: [{ text: { content: book.title || "Senza titolo" } }] },
-      "Autore": { rich_text: [{ text: { content: book.author || "" } }] },
-      "Casa Editrice": { rich_text: [{ text: { content: book.publisher || "" } }] },
-      "ISBN-10": { rich_text: [{ text: { content: book.isbn10 || "" } }] },
-      "ISBN-13": { rich_text: [{ text: { content: String(book.isbn13 || "") } }] },
-      "ASIN": { rich_text: [{ text: { content: book.asin || "" } }] },
-      "Descrizione": { rich_text: [{ text: { content: book.description || "" } }] },
-      "Copertina URL": book.coverUrl ? { url: book.coverUrl } : undefined,
-      "Posizione": book.location ? { select: { name: book.location } } : undefined,
-      "Lingua": book.language ? { select: { name: book.language } } : undefined
-    };
-
-    Object.keys(properties).forEach(k => { if (properties[k] === undefined) delete properties[k]; });
-
-    const createResp = await fetch("https://api.notion.com/v1/pages", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${notionToken}`,
-        "Notion-Version": NOTION_VERSION,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        parent: { database_id: databaseId },
-        properties
-      })
-    });
-
-    const createText = await createResp.text();
-    let createJson;
-    try { createJson = JSON.parse(createText); } catch { createJson = { raw: createText }; }
-
-    if (!createResp.ok) {
-      return res.status(createResp.status).json({ error: "Notion create page failed", details: createJson });
-    }
-
-    return res.status(200).json({ status: "created", pageId: createJson.id });
-
-  } catch (err) {
-    console.error("FUNCTION CRASH:", err);
-    return res.status(500).json({ error: "Server crash", details: String(err) });
-  }
-};
+## Deployment
+ID: dpl_ADzgpteTnTBqzND7SkcZNw2StK2v
+Environment: production
+Branch: main
