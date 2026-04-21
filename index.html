@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Libreria Scanner</title>
+
+  <!-- html5-qrcode library (scanner barcode/QR) -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+
+<body style="font-family: Arial, sans-serif; max-width: 820px; margin: 20px auto; padding: 0 12px;">
+
+  <h1 style="margin-bottom: 6px;">📚 Libreria Scanner</h1>
+  <p style="margin-top: 0; color: #444;">
+    STEP 8 + STEP 9 — Scanner ISBN → Metadati → Salvataggio in Notion
+  </p>
+
+  <!-- ============ SCANNER (STEP 7/8) ============ -->
+  <h2 style="margin: 18px 0 10px 0;">📷 Scansiona ISBN</h2>
+  <div id="reader" style="width: 340px; margin: 10px 0;"></div>
+
+  <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <div><strong>ISBN rilevato:</strong></div>
+    <div id="result" style="font-size: 18px; font-weight: bold; margin-top: 6px;">---</div>
+  </div>
+
+  <!-- ============ DETTAGLI LIBRO (STEP 8) ============ -->
+  <hr style="margin: 18px 0;">
+
+  <h2 style="margin: 0 0 10px 0;">📖 Dettagli libro (Open Library)</h2>
+
+  <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <p style="margin: 6px 0;"><strong>Titolo:</strong> <span id="book-title">---</span></p>
+    <p style="margin: 6px 0;"><strong>Autore:</strong> <span id="book-author">---</span></p>
+    <p style="margin: 6px 0;"><strong>Lingua:</strong> <span id="book-language">---</span></p>
+
+    <img id="book-cover"
+         src=""
+         alt="Copertina libro"
+         style="max-width: 220px; margin-top: 10px; display: none; border: 1px solid #eee; border-radius: 6px;">
+  </div>
+
+  <!-- ============ CONFIG (STEP 9.3.1) ============ -->
+  <hr style="margin: 18px 0;">
+
+  <h2 style="margin: 0 0 10px 0;">⚙️ Configurazione (una sola volta per device)</h2>
+
+  <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <label><strong>Notion API Key:</strong></label><br>
+    <input id="notionKey" type="password"
+           style="width: 100%; margin: 6px 0; padding: 8px;"
+           placeholder="secret_xxx..." />
+
+    <label><strong>Database ID:</strong></label><br>
+    <input id="dbId" type="text"
+           style="width: 100%; margin: 6px 0; padding: 8px;"
+           placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+
+    <button id="saveConfigBtn" style="padding: 8px 12px;">Salva configurazione</button>
+    <span id="configStatus" style="margin-left: 10px; font-weight: bold;"></span>
+
+    <p style="color:#666; margin-top:10px;">
+      La configurazione viene salvata nel browser (localStorage). Su ogni device va fatta una volta.
+    </p>
+  </div>
+
+  <!-- ============ SAVE (STEP 9.3.1) ============ -->
+  <hr style="margin: 18px 0;">
+
+  <h2 style="margin: 0 0 10px 0;">💾 Salva in Notion</h2>
+
+  <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <label for="location"><strong>Posizione:</strong></label>
+    <select id="location" style="margin-left: 6px; padding: 6px;">
+      <option value="Libreria Milano">Libreria Milano</option>
+      <option value="Kindle">Kindle</option>
+      <option value="Montagna">Montagna</option>
+    </select>
+
+    <button id="saveBtn" style="margin-left:10px; padding: 8px 12px;">Salva in Notion</button>
+
+    <p id="saveStatus" style="margin-top:10px; font-weight:bold;"></p>
+  </div>
+
+  <script>
+    // -----------------------------
+    // GLOBAL STATE
+    // -----------------------------
+    let alreadyScanned = false;
+    let currentBook = null;
+
+    // -----------------------------
+    // Helpers
+    // -----------------------------
+    function setText(id, value) {
+      document.getElementById(id).innerText = value;
+    }
+
+    // Convert language code to Italian readable name (basic)
+    function langToItalianName(code) {
+      const c = String(code || "").toLowerCase().trim();
+      const map = {
+        "it": "Italiano", "ita": "Italiano",
+        "en": "Inglese",  "eng": "Inglese",
+        "de": "Tedesco",  "deu": "Tedesco", "ger": "Tedesco",
+        "es": "Spagnolo", "spa": "Spagnolo",
+        "fr": "Francese", "fra": "Francese", "fre": "Francese",
+        "pt": "Portoghese", "por": "Portoghese"
+      };
+      return map[c] || (c ? c.toUpperCase() : "");
+    }
+
+    // -----------------------------
+    // STEP 8: Fetch book details from Open Library
+    // Books API + Covers API are official Open Library endpoints. [3](https://www.appsheet.com/templates?appGuidString=41526dfe-ad8b-4c6b-a75d-7eb94b817a73)[4](https://dev.to/googleworkspace/automate-your-google-workspace-with-apps-script-triggers-5090)
+    // -----------------------------
+    async function fetchBookDetails(isbn) {
+      const url =
+        "https://openlibrary.org/api/books" +
+        "?bibkeys=ISBN:" + encodeURIComponent(isbn) +
+        "&format=json" +
+        "&jscmd=data";
+
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        const key = "ISBN:" + isbn;
+
+        // Reset UI
+        setText("book-title", "---");
+        setText("book-author", "---");
+        setText("book-language", "---");
+        const coverImg = document.getElementById("book-cover");
+        coverImg.style.display = "none";
+        coverImg.src = "";
+
+        if (!data[key]) {
+          alert("Libro non trovato su Open Library.");
+          currentBook = null;
+          return;
+        }
+
+        const book = data[key];
+
+        const title = book.title || "";
+        const author = (book.authors && book.authors.length)
+          ? book.authors.map(a => a.name).join(", ")
+          : "";
+
+        // Open Library language is not always present; when present it may be like "/languages/eng"
+        let langCode = "";
+        if (book.languages && book.languages.length && book.languages[0].key) {
+          langCode = book.languages[0].key.split("/").pop() || "";
+        }
+        const langName = langToItalianName(langCode);
+
+        setText("book-title", title || "—");
+        setText("book-author", author || "—");
+        setText("book-language", langName || "Sconosciuta");
+
+        // Cover via Covers API URL pattern (ISBN, size L). [4](https://dev.to/googleworkspace/automate-your-google-workspace-with-apps-script-triggers-5090)
+        const coverUrl =
+          "https://covers.openlibrary.org/b/isbn/" + encodeURIComponent(isbn) + "-L.jpg";
+
+        coverImg.onload = () => { coverImg.style.display = "block"; };
+        coverImg.onerror = () => { coverImg.style.display = "none"; };
+        coverImg.src = coverUrl;
+
+        // Save currentBook state (for Step 9 save)
+        currentBook = {
+          isbn13: isbn,
+          title: title,
+          author: author,
+          coverUrl: coverUrl,
+          language: langName || ""  // will be saved if your Notion has "Lingua"
+        };
+
+      } catch (err) {
+        console.error(err);
+        alert("Errore nel recupero dei dati (Open Library).");
+        currentBook = null;
+      }
+    }
+
+    // -----------------------------
+    // STEP 7/8: Scanner callbacks (html5-qrcode) [1](https://support.google.com/appsheet/answer/10106437?hl=en)[2](https://www.linkedin.com/posts/avery-software_buildinpublic-nocode-ai-activity-7450519046833278976-dd8s)
+    // -----------------------------
+    function onScanSuccess(decodedText, decodedResult) {
+      if (alreadyScanned) return;
+      alreadyScanned = true;
+
+      setText("result", decodedText);
+
+      // Stop camera after scan (clear) [2](https://www.linkedin.com/posts/avery-software_buildinpublic-nocode-ai-activity-7450519046833278976-dd8s)[1](https://support.google.com/appsheet/answer/10106437?hl=en)
+      html5QrcodeScanner.clear();
+
+      // Fetch details (Step 8)
+      fetchBookDetails(decodedText);
+    }
+
+    function onScanError(errorMessage) {
+      // normal while scanning; keep silent
+      // console.warn(errorMessage);
+    }
+
+    const html5QrcodeScanner = new Html5QrcodeScanner(
+      "reader",
+      {
+        fps: 10,
+        qrbox: { width: 260, height: 160 },
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8
+        ]
+      },
+      false
+    );
+
+    html5QrcodeScanner.render(onScanSuccess, onScanError);
+
+    // -----------------------------
+    // STEP 9.3.1: Config in localStorage (per device)
+    // -----------------------------
+    (function loadConfig() {
+      const savedKey = localStorage.getItem("NOTION_API_KEY") || "";
+      const savedDb  = localStorage.getItem("NOTION_DB_ID") || "";
+      document.getElementById("notionKey").value = savedKey;
+      document.getElementById("dbId").value = savedDb;
+    })();
+
+    document.getElementById("saveConfigBtn").addEventListener("click", () => {
+      const key = document.getElementById("notionKey").value.trim();
+      const db  = document.getElementById("dbId").value.trim();
+      const status = document.getElementById("configStatus");
+
+      if (!key || !db) {
+        status.innerText = "⚠️ Mancano dati";
+        return;
+      }
+
+      localStorage.setItem("NOTION_API_KEY", key);
+      localStorage.setItem("NOTION_DB_ID", db);
+      status.innerText = "✅ Salvato";
+    });
+
+    // -----------------------------
+    // STEP 9.3.1: Save book -> Vercel Function (/api/save-book)
+    // Vercel Functions map api/*.js to /api/* endpoints. [5](https://support.google.com/appsheet/answer/15263206?hl=en)
+    // Notion create/query happen inside save-book.js using Notion API endpoints. [6](https://support.google.com/appsheet/answer/10107701?hl=en)
+    // -----------------------------
+    document.getElementById("saveBtn").addEventListener("click", async () => {
+      const statusEl = document.getElementById("saveStatus");
+
+      if (!currentBook || !currentBook.isbn13) {
+        statusEl.innerText = "Prima scansiona un libro.";
+        return;
+      }
+
+      const notionToken = localStorage.getItem("NOTION_API_KEY");
+      const databaseId  = localStorage.getItem("NOTION_DB_ID");
+
+      if (!notionToken || !databaseId) {
+        statusEl.innerText = "Config mancante: inserisci Notion API Key e Database ID.";
+        return;
+      }
+
+      const location = document.getElementById("location").value;
+      statusEl.innerText = "Salvataggio in corso...";
+
+      try {
+        const resp = await fetch("/api/save-book", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            notionToken,
+            databaseId,
+            book: {
+              ...currentBook,
+              location
+            }
+          })
+        });
+
+        const json = await resp.json();
+
+        if (json.status === "duplicate") {
+          statusEl.innerText = "⚠️ Libro già presente (duplicato).";
+        } else if (json.status === "created") {
+          statusEl.innerText = "✅ Salvato in Notion!";
+        } else {
+          statusEl.innerText = "❌ Errore: " + (json.error || "sconosciuto");
+          console.log("Dettagli errore:", json);
+        }
+      } catch (err) {
+        console.error(err);
+        statusEl.innerText = "❌ Errore di rete / chiamata API";
+      }
+    });
+
+  </script>
+</body>
+</html>
+``
