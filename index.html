@@ -4,35 +4,40 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Libreria Scanner</title>
-  <!-- html5-qrcode library -->
+
+  <!-- html5-qrcode library (scanner) -->
   <script src="https://unpkg.com/html5-qrcode"></script>
 </head>
+
 <body style="font-family: Arial, sans-serif; max-width: 820px; margin: 20px auto; padding: 0 12px;">
+
   <h1 style="margin-bottom: 6px;">📚 Libreria Scanner</h1>
   <p style="margin-top: 0; color: #444;">
-    Scanner ISBN → Metadati → Copertina (fallback ISBN + Search) → Salvataggio in Notion
-    <br><small>Fallback: Open Library → Google Books (con retry automatico se temporaneamente down)</small>
+    Scanner ISBN → Metadati → Copertina → Salvataggio in Notion
+    <br><small>Fallback metadati: Open Library → Google Books (con retry automatico se temporaneamente down)</small>
   </p>
-  <!-- SCANNER -->
+
   <h2 style="margin: 18px 0 10px 0;">📷 Scansiona ISBN</h2>
   <div id="reader" style="width: 340px; margin: 10px 0;"></div>
+
   <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
     <div><strong>ISBN rilevato:</strong></div>
     <div id="result" style="font-size: 18px; font-weight: bold; margin-top: 6px;">---</div>
   </div>
-  <!-- ISBN MANUALE -->
+
   <hr style="margin: 18px 0;">
+
   <h2 style="margin: 0 0 10px 0;">⌨️ ISBN manuale (se lo scanner non legge)</h2>
   <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
-    <input id="manualIsbn" type="text"
-           inputmode="numeric"
+    <input id="manualIsbn" type="text" inputmode="numeric"
            placeholder="Inserisci ISBN-13 (13 cifre) oppure ISBN-10 (10 caratteri)"
            style="width: 100%; margin: 6px 0; padding: 8px;" />
     <button id="manualIsbnBtn" style="padding: 8px 12px;">Cerca ISBN</button>
     <span id="manualIsbnStatus" style="margin-left: 10px; font-weight: bold;"></span>
   </div>
-  <!-- DETTAGLI -->
+
   <hr style="margin: 18px 0;">
+
   <h2 style="margin: 0 0 10px 0;">📖 Dettagli libro</h2>
   <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
     <p style="margin: 6px 0;"><strong>Titolo:</strong> <span id="book-title">---</span></p>
@@ -40,32 +45,36 @@
     <p style="margin: 6px 0;"><strong>Lingua:</strong> <span id="book-language">---</span></p>
     <p style="margin: 6px 0;"><strong>Fonte metadati:</strong> <span id="book-source">---</span></p>
     <p style="margin: 6px 0;"><strong>Cover URL (debug):</strong> <span id="book-cover-url">---</span></p>
+
     <img id="book-cover"
          src=""
          alt="Copertina libro"
          style="max-width: 220px; margin-top: 10px; display: none; border: 1px solid #eee; border-radius: 6px;">
   </div>
-  <!-- CONFIG -->
+
   <hr style="margin: 18px 0;">
+
   <h2 style="margin: 0 0 10px 0;">⚙️ Configurazione (una sola volta per device)</h2>
   <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
     <label><strong>Notion API Key:</strong></label><br>
     <input id="notionKey" type="password"
            style="width: 100%; margin: 6px 0; padding: 8px;"
            placeholder="ntn_... oppure secret_..." />
+
     <label><strong>Database ID:</strong></label><br>
     <input id="dbId" type="text"
            style="width: 100%; margin: 6px 0; padding: 8px;"
            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+
     <button id="saveConfigBtn" style="padding: 8px 12px;">Salva configurazione</button>
     <button id="clearConfigBtn" style="padding: 8px 12px; margin-left: 8px;">Reset config</button>
     <span id="configStatus" style="margin-left: 10px; font-weight: bold;"></span>
-    <p style="color:#666; margin-top:10px;">
-      Salvo API key + Database ID in localStorage (solo su questo device/browser).
-    </p>
+
+    <p style="color:#666; margin-top:10px;">Salvo API key + Database ID in localStorage (solo su questo device/browser).</p>
   </div>
-  <!-- SALVA -->
+
   <hr style="margin: 18px 0;">
+
   <h2 style="margin: 0 0 10px 0;">💾 Salva in Notion</h2>
   <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
     <label for="location"><strong>Posizione:</strong></label>
@@ -75,21 +84,27 @@
       <option value="Kindle">Kindle</option>
       <option value="Bimbi">Bimbi</option>
     </select>
+
     <button id="saveBtn" style="margin-left:10px; padding: 8px 12px;">Salva in Notion</button>
     <button id="restartBtn" style="margin-left:10px; padding: 8px 12px;">🔄 Nuova scansione</button>
+
     <p id="saveStatus" style="margin-top:10px; font-weight:bold;"></p>
   </div>
+
   <script>
     let alreadyScanned = false;
     let currentBook = null;
+
     function setText(id, value) { document.getElementById(id).innerText = value; }
     function normalizeIsbn(s) { return String(s || "").replace(/[^0-9Xx]/g, "").toUpperCase(); }
+
     function langToItalianName(code) {
       const c = String(code || "").toLowerCase().trim();
       const map = { it:"Italiano", ita:"Italiano", en:"Inglese", eng:"Inglese", de:"Tedesco", deu:"Tedesco", ger:"Tedesco",
                     es:"Spagnolo", spa:"Spagnolo", fr:"Francese", fra:"Francese", fre:"Francese", pt:"Portoghese", por:"Portoghese" };
       return map[c] || (c ? c.toUpperCase() : "");
     }
+
     function imageLoads(url) {
       return new Promise((resolve) => {
         const img = new Image();
@@ -98,18 +113,25 @@
         img.src = url;
       });
     }
-    function coverUrlByIsbn(isbn, size="L") { return `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-${size}.jpg?default=false`; }
-    function coverUrlById(id, size="L") { return `https://covers.openlibrary.org/b/id/${encodeURIComponent(id)}-${size}.jpg?default=false`; }
+
+    function coverUrlByIsbn(isbn, size="L") {
+      return `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-${size}.jpg?default=false`;
+    }
+    function coverUrlById(id, size="L") {
+      return `https://covers.openlibrary.org/b/id/${encodeURIComponent(id)}-${size}.jpg?default=false`;
+    }
+
     function isbn13ToIsbn10(isbn13) {
       const s = String(isbn13 || "").replace(/\D/g, "");
       if (s.length !== 13 || !s.startsWith("978")) return "";
       const core = s.substring(3, 12);
       let sum = 0;
-      for (let i=0;i<9;i++) sum += (10-i) * parseInt(core[i],10);
+      for (let i=0; i<9; i++) sum += (10-i) * parseInt(core[i],10);
       const r = sum % 11;
       const check = (11 - r) % 11;
       return core + (check === 10 ? "X" : String(check));
     }
+
     async function searchCoverFallback(title, author) {
       const q = encodeURIComponent(`${title || ""} ${author || ""}`.trim());
       if (!q) return "";
@@ -117,6 +139,7 @@
       const resp = await fetch(url);
       const data = await resp.json();
       if (!data || !data.docs || !data.docs.length) return "";
+
       for (const d of data.docs) {
         if (d.cover_i) {
           const u = coverUrlById(d.cover_i);
@@ -133,14 +156,17 @@
       }
       return "";
     }
+
     async function resolveBestCoverUrl(isbn13, title, author) {
       const cacheKey = `cover_${isbn13}`;
       const cached = sessionStorage.getItem(cacheKey);
       if (cached !== null) return cached;
+
       const candidates = [];
       if (isbn13) candidates.push(coverUrlByIsbn(isbn13));
       const isbn10 = isbn13ToIsbn10(isbn13);
       if (isbn10) candidates.push(coverUrlByIsbn(isbn10));
+
       for (const u of candidates) {
         if (await imageLoads(u)) { sessionStorage.setItem(cacheKey, u); return u; }
       }
@@ -148,6 +174,7 @@
       sessionStorage.setItem(cacheKey, u2 || "");
       return u2 || "";
     }
+
     function resetBookUI() {
       const coverImg = document.getElementById("book-cover");
       coverImg.style.display = "none";
@@ -158,6 +185,7 @@
       setText("book-source","---");
       setText("book-cover-url","---");
     }
+
     function showCover(url) {
       const coverImg = document.getElementById("book-cover");
       coverImg.style.display = "none";
@@ -167,113 +195,138 @@
       coverImg.onerror = () => { coverImg.style.display = "none"; };
       coverImg.src = url;
     }
+
+    // --- MAIN: Open Library → (miss) Google Books → cover fallback ---
     async function fetchBookDetails(isbn, gbRetryCount = 0) {
       resetBookUI();
       currentBook = null;
+
+      // 1) Open Library
       const olUrl = "https://openlibrary.org/api/books"
         + "?bibkeys=ISBN:" + encodeURIComponent(isbn)
         + "&format=json&jscmd=data";
+
       try {
-        // 1) Try Open Library
         const olResp = await fetch(olUrl);
         const olData = await olResp.json();
         const key = "ISBN:" + isbn;
+
         if (olData && olData[key]) {
           const b = olData[key];
           const title = b.title || "";
-          const author = (b.authors && b.authors.length) ? b.authors.map(a=>a.name).join(", ") : "";
+          const author = (b.authors && b.authors.length) ? b.authors.map(a => a.name).join(", ") : "";
+
           let langCode = "";
           if (b.languages && b.languages.length && b.languages[0].key) {
             langCode = b.languages[0].key.split("/").pop() || "";
           }
           const langName = langToItalianName(langCode);
+
           setText("book-title", title || "—");
           setText("book-author", author || "—");
           setText("book-language", langName || "Sconosciuta");
           setText("book-source", "Open Library");
+
           const bestCoverUrl = await resolveBestCoverUrl(isbn, title, author);
           setText("book-cover-url", bestCoverUrl || "(nessuna cover trovata)");
           showCover(bestCoverUrl);
+
           currentBook = { isbn13: isbn, title, author, coverUrl: bestCoverUrl || "", language: langName || "" };
           return;
         }
-        // 2) Open Library MISS -> try Google Books endpoint
+
+        // 2) Google Books fallback
         setText("book-source", "Google Books (fallback)");
         const gbResp = await fetch(`/api/google-books?isbn=${encodeURIComponent(isbn)}`);
         const gb = await gbResp.json();
-        // Patch: gestione temporary:true con retry automatico
+
         if (gb && gb.temporary) {
           setText("book-title", "Google Books temporaneamente non disponibile");
           setText("book-author", "");
           setText("book-language", "");
           setText("book-cover-url", "(riprovare tra 1–2 minuti)");
           showCover("");
+
           const maxAutoRetry = 2;
-          const waitMs = 90000; // 90 sec
+          const waitMs = 90000;
+
           if (gbRetryCount < maxAutoRetry) {
-            const msg = gb.message || "Google Books temporaneamente non disponibile. Riprovo tra 1-2 minuti.";
-            alert(msg + `\n\nRiprovo automaticamente tra ${Math.round(waitMs/1000)} secondi...`);
-            setTimeout(() => {
-              fetchBookDetails(isbn, gbRetryCount + 1);
-            }, waitMs);
+            alert((gb.message || "Google Books temporaneamente non disponibile.")
+              + `\n\nRiprovo automaticamente tra ${Math.round(waitMs/1000)} secondi...`);
+            setTimeout(() => fetchBookDetails(isbn, gbRetryCount + 1), waitMs);
           } else {
             alert((gb.message || "Google Books temporaneamente non disponibile.")
-              + "\n\nHo già riprovato automaticamente. Puoi riprovare più tardi oppure inserire manualmente i dati in Notion (opzione A).");
+              + "\n\nHo già riprovato automaticamente. Riprova più tardi oppure inserisci manualmente in Notion.");
           }
-          currentBook = null;
           return;
         }
+
         if (gb && gb.found) {
           const title = gb.title || "";
           const author = gb.author || "";
           const langName = langToItalianName(gb.language || "");
+
           setText("book-title", title || "—");
           setText("book-author", author || "—");
           setText("book-language", langName || "Sconosciuta");
           setText("book-source", "Google Books");
-          let coverUrl = gb.coverUrl || "";
-          if (!coverUrl) {
-            coverUrl = await resolveBestCoverUrl(isbn, title, author);
-          }
+
+          let coverUrl = (gb.coverUrl || "").replace(/&amp;/g, "&").replace(/^http:\/\//i, "https://");
+          if (!coverUrl) coverUrl = await resolveBestCoverUrl(isbn, title, author);
+
           setText("book-cover-url", coverUrl || "(nessuna cover trovata)");
           showCover(coverUrl);
+
           currentBook = { isbn13: isbn, title, author, coverUrl: coverUrl || "", language: langName || "" };
           return;
         }
-        // 3) Also Google Books MISS
+
         alert("Libro non trovato né su Open Library né su Google Books.");
-        currentBook = null;
-        resetBookUI();
         setText("book-source", "Nessuna");
         return;
+
       } catch (err) {
         console.error(err);
         alert("Errore di rete durante la ricerca (Open Library / Google Books).");
-        currentBook = null;
-        resetBookUI();
       }
     }
+
+    // Scanner callback
     function onScanSuccess(decodedText) {
       if (alreadyScanned) return;
       alreadyScanned = true;
+
       const isbn = normalizeIsbn(decodedText);
       setText("result", isbn);
+
       html5QrcodeScanner.clear();
       fetchBookDetails(isbn);
     }
     function onScanError(_) {}
+
+    // Start scanner
     const html5QrcodeScanner = new Html5QrcodeScanner(
       "reader",
-      { fps: 10, qrbox: { width: 260, height: 160 }, rememberLastUsedCamera: true,
-        formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8] },
+      {
+        fps: 10,
+        qrbox: { width: 260, height: 160 },
+        rememberLastUsedCamera: true,
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8
+        ]
+      },
       false
     );
     html5QrcodeScanner.render(onScanSuccess, onScanError);
+
+    // Load config
     (function loadConfig() {
       document.getElementById("notionKey").value = localStorage.getItem("NOTION_API_KEY") || "";
       document.getElementById("dbId").value = localStorage.getItem("NOTION_DB_ID") || "";
       document.getElementById("location").value = localStorage.getItem("LAST_LOCATION") || "Milano";
     })();
+
     document.getElementById("saveConfigBtn").addEventListener("click", () => {
       const key = document.getElementById("notionKey").value.trim();
       const db = document.getElementById("dbId").value.trim();
@@ -282,6 +335,7 @@
       localStorage.setItem("NOTION_DB_ID", db);
       document.getElementById("configStatus").innerText = "✅ Salvato";
     });
+
     document.getElementById("clearConfigBtn").addEventListener("click", () => {
       localStorage.removeItem("NOTION_API_KEY");
       localStorage.removeItem("NOTION_DB_ID");
@@ -289,11 +343,76 @@
       document.getElementById("dbId").value = "";
       document.getElementById("configStatus").innerText = "🧹 Resettato";
     });
+
     document.getElementById("location").addEventListener("change", (e) => {
       localStorage.setItem("LAST_LOCATION", e.target.value);
     });
+
+    // Manual ISBN
     document.getElementById("manualIsbnBtn").addEventListener("click", async () => {
       const status = document.getElementById("manualIsbnStatus");
       const isbn = normalizeIsbn(document.getElementById("manualIsbn").value);
       status.innerText = "";
-      if (!(isbn.length === 10 || isbn.length === 13)) { status.inner
+      if (!(isbn.length === 10 || isbn.length === 13)) { status.innerText = "⚠️ Inserisci 10 o 13 caratteri"; return; }
+      setText("result", isbn);
+      status.innerText = "🔎 Cerco...";
+      await fetchBookDetails(isbn);
+      status.innerText = "✅ OK";
+    });
+
+    // Save to Notion
+    document.getElementById("saveBtn").addEventListener("click", async () => {
+      const statusEl = document.getElementById("saveStatus");
+
+      if (!currentBook || !currentBook.isbn13) {
+        statusEl.innerText = "Prima scansiona o inserisci un ISBN (e attendi che venga trovato).";
+        return;
+      }
+
+      const notionToken = localStorage.getItem("NOTION_API_KEY");
+      const databaseId = localStorage.getItem("NOTION_DB_ID");
+      if (!notionToken || !databaseId) {
+        statusEl.innerText = "Config mancante: inserisci Notion API Key e Database ID.";
+        return;
+      }
+
+      const location = document.getElementById("location").value;
+      statusEl.innerText = "Salvataggio in corso...";
+
+      try {
+        const resp = await fetch("/api/save-book", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            notionToken,
+            databaseId,
+            book: { ...currentBook, location }
+          })
+        });
+
+        const json = await resp.json();
+
+        // mostra dettagli se presenti
+        const detailsMsg =
+          (json && json.details && json.details.message) ? json.details.message :
+          (json && json.details && json.details.raw) ? json.details.raw : "";
+
+        if (json.status === "duplicate") {
+          statusEl.innerText = "⚠️ Libro già presente (duplicato).";
+        } else if (json.status === "created") {
+          statusEl.innerText = "✅ Salvato in Notion!";
+        } else {
+          statusEl.innerText = "❌ " + (json.error || "Errore") + (detailsMsg ? (": " + detailsMsg) : "");
+          console.log("Dettagli errore:", json);
+        }
+      } catch (e) {
+        console.error(e);
+        statusEl.innerText = "❌ Errore di rete / chiamata API";
+      }
+    });
+
+    document.getElementById("restartBtn").addEventListener("click", () => location.reload());
+  </script>
+</body>
+</html>
+``
