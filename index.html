@@ -13,10 +13,10 @@
 
   <h1 style="margin-bottom: 6px;">📚 Libreria Scanner</h1>
   <p style="margin-top: 0; color: #444;">
-    STEP 8 + STEP 9 — Scanner ISBN → Metadati → Salvataggio in Notion
+    Scanner ISBN → Metadati → Salvataggio in Notion (con fallback copertina ISBN + Search)
   </p>
 
-  <!-- ============ SCANNER (STEP 7/8) ============ -->
+  <!-- ============ SCANNER ============ -->
   <h2 style="margin: 18px 0 10px 0;">📷 Scansiona ISBN</h2>
   <div id="reader" style="width: 340px; margin: 10px 0;"></div>
 
@@ -25,7 +25,7 @@
     <div id="result" style="font-size: 18px; font-weight: bold; margin-top: 6px;">---</div>
   </div>
 
-  <!-- ============ DETTAGLI LIBRO (STEP 8) ============ -->
+  <!-- ============ DETTAGLI LIBRO ============ -->
   <hr style="margin: 18px 0;">
 
   <h2 style="margin: 0 0 10px 0;">📖 Dettagli libro (Open Library)</h2>
@@ -41,7 +41,7 @@
          style="max-width: 220px; margin-top: 10px; display: none; border: 1px solid #eee; border-radius: 6px;">
   </div>
 
-  <!-- ============ CONFIG (STEP 9.3.1) ============ -->
+  <!-- ============ CONFIG ============ -->
   <hr style="margin: 18px 0;">
 
   <h2 style="margin: 0 0 10px 0;">⚙️ Configurazione (una sola volta per device)</h2>
@@ -50,12 +50,12 @@
     <label><strong>Notion API Key:</strong></label><br>
     <input id="notionKey" type="password"
            style="width: 100%; margin: 6px 0; padding: 8px;"
-           placeholder="secret_xxx..." />
+           placeholder="ntn_... oppure secret_..." />
 
     <label><strong>Database ID:</strong></label><br>
     <input id="dbId" type="text"
            style="width: 100%; margin: 6px 0; padding: 8px;"
-           placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+           placeholder="349bbbf581dc805dabf2d72448ddd44e" />
 
     <button id="saveConfigBtn" style="padding: 8px 12px;">Salva configurazione</button>
     <span id="configStatus" style="margin-left: 10px; font-weight: bold;"></span>
@@ -65,19 +65,19 @@
     </p>
   </div>
 
-  <!-- ============ SAVE (STEP 9.3.1) ============ -->
+  <!-- ============ SAVE ============ -->
   <hr style="margin: 18px 0;">
 
   <h2 style="margin: 0 0 10px 0;">💾 Salva in Notion</h2>
 
   <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
     <label for="location"><strong>Posizione:</strong></label>
-  <select id="location" style="margin-left: 6px; padding: 6px;">
-    <option value="Milano">Milano</option>
-    <option value="Montigiano">Montigiano</option>
-    <option value="Kindle">Kindle</option>
-    <option value="Bimbi">Bimbi</option>
-  </select>
+    <select id="location" style="margin-left: 6px; padding: 6px;">
+      <option value="Milano">Milano</option>
+      <option value="Montigiano">Montigiano</option>
+      <option value="Kindle">Kindle</option>
+      <option value="Bimbi">Bimbi</option>
+    </select>
 
     <button id="saveBtn" style="margin-left:10px; padding: 8px 12px;">Salva in Notion</button>
 
@@ -91,9 +91,6 @@
     let alreadyScanned = false;
     let currentBook = null;
 
-    // -----------------------------
-    // Helpers
-    // -----------------------------
     function setText(id, value) {
       document.getElementById(id).innerText = value;
     }
@@ -113,8 +110,97 @@
     }
 
     // -----------------------------
-    // STEP 8: Fetch book details from Open Library
-    // Books API + Covers API are official Open Library endpoints. [3](https://www.appsheet.com/templates?appGuidString=41526dfe-ad8b-4c6b-a75d-7eb94b817a73)[4](https://dev.to/googleworkspace/automate-your-google-workspace-with-apps-script-triggers-5090)
+    // COVER FALLBACK: ISBN + Search (Open Library)
+    // Covers API pattern + ?default=false (404 if missing) [2](https://discuss.google.dev/t/convert-list-of-numbers-from-longtext-field-to-number/179392)
+    // Search API via /search.json (part of Open Library APIs) [3](https://www.amazon.com/1984/dp/8804668237)[1](https://internetarchive.github.io/openlibrary-api/)
+    // -----------------------------
+    function imageLoads(url) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = url;
+      });
+    }
+
+    function coverUrlByIsbn(isbn, size = "L") {
+      return `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-${size}.jpg?default=false`;
+    }
+
+    function coverUrlById(coverId, size = "L") {
+      return `https://covers.openlibrary.org/b/id/${encodeURIComponent(coverId)}-${size}.jpg?default=false`;
+    }
+
+    function isbn13ToIsbn10(isbn13) {
+      const s = String(isbn13 || "").replace(/\D/g, "");
+      if (s.length !== 13) return "";
+      if (!s.startsWith("978")) return "";
+      const core = s.substring(3, 12);
+
+      let sum = 0;
+      for (let i = 0; i < 9; i++) sum += (10 - i) * parseInt(core[i], 10);
+      const r = sum % 11;
+      const check = (11 - r) % 11;
+      return core + (check === 10 ? "X" : String(check));
+    }
+
+    async function searchCoverFallback(title, author) {
+      const q = encodeURIComponent(`${title || ""} ${author || ""}`.trim());
+      if (!q) return "";
+
+      const url = `https://openlibrary.org/search.json?q=${q}&limit=8`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+
+      if (!data || !data.docs || !data.docs.length) return "";
+
+      // Prefer cover_i (id) first
+      for (const d of data.docs) {
+        if (d.cover_i) {
+          const u = coverUrlById(d.cover_i, "L");
+          if (await imageLoads(u)) return u;
+        }
+      }
+
+      // Then try ISBNs returned by search
+      for (const d of data.docs) {
+        if (Array.isArray(d.isbn) && d.isbn.length) {
+          for (const i of d.isbn.slice(0, 12)) {
+            const u = coverUrlByIsbn(i, "L");
+            if (await imageLoads(u)) return u;
+          }
+        }
+      }
+
+      return "";
+    }
+
+    async function resolveBestCoverUrl(isbn13, title, author) {
+      const cacheKey = `cover_${isbn13}`;
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached !== null) return cached;
+
+      const candidates = [];
+      if (isbn13) candidates.push(coverUrlByIsbn(isbn13, "L"));
+
+      const isbn10 = isbn13ToIsbn10(isbn13);
+      if (isbn10) candidates.push(coverUrlByIsbn(isbn10, "L"));
+
+      for (const u of candidates) {
+        if (await imageLoads(u)) {
+          sessionStorage.setItem(cacheKey, u);
+          return u;
+        }
+      }
+
+      const u2 = await searchCoverFallback(title, author);
+      sessionStorage.setItem(cacheKey, u2 || "");
+      return u2 || "";
+    }
+
+    // -----------------------------
+    // STEP 8: Fetch book details from Open Library Books API
+    // Books API endpoint: /api/books?bibkeys=...&format=json&jscmd=data [1](https://internetarchive.github.io/openlibrary-api/)
     // -----------------------------
     async function fetchBookDetails(isbn) {
       const url =
@@ -150,7 +236,6 @@
           ? book.authors.map(a => a.name).join(", ")
           : "";
 
-        // Open Library language is not always present; when present it may be like "/languages/eng"
         let langCode = "";
         if (book.languages && book.languages.length && book.languages[0].key) {
           langCode = book.languages[0].key.split("/").pop() || "";
@@ -161,21 +246,22 @@
         setText("book-author", author || "—");
         setText("book-language", langName || "Sconosciuta");
 
-        // Cover via Covers API URL pattern (ISBN, size L). [4](https://dev.to/googleworkspace/automate-your-google-workspace-with-apps-script-triggers-5090)
-        const coverUrl =
-          "https://covers.openlibrary.org/b/isbn/" + encodeURIComponent(isbn) + "-L.jpg";
+        // ✅ Resolve cover with fallback ISBN + Search
+        const bestCoverUrl = await resolveBestCoverUrl(isbn, title, author);
 
-        coverImg.onload = () => { coverImg.style.display = "block"; };
-        coverImg.onerror = () => { coverImg.style.display = "none"; };
-        coverImg.src = coverUrl;
+        if (bestCoverUrl) {
+          coverImg.onload = () => { coverImg.style.display = "block"; };
+          coverImg.onerror = () => { coverImg.style.display = "none"; };
+          coverImg.src = bestCoverUrl;
+        }
 
         // Save currentBook state (for Step 9 save)
         currentBook = {
           isbn13: isbn,
           title: title,
           author: author,
-          coverUrl: coverUrl,
-          language: langName || ""  // will be saved if your Notion has "Lingua"
+          coverUrl: bestCoverUrl || "",
+          language: langName || ""
         };
 
       } catch (err) {
@@ -186,7 +272,7 @@
     }
 
     // -----------------------------
-    // STEP 7/8: Scanner callbacks (html5-qrcode) [1](https://support.google.com/appsheet/answer/10106437?hl=en)[2](https://www.linkedin.com/posts/avery-software_buildinpublic-nocode-ai-activity-7450519046833278976-dd8s)
+    // Scanner callbacks (html5-qrcode) [4](https://siemensenergyag-my.sharepoint.com/personal/heider_castro_siemens-energy_com/Documents/File%20chat%20di%20Microsoft%20Copilot/README_LIBRERIA_SCANNER%202.md)
     // -----------------------------
     function onScanSuccess(decodedText, decodedResult) {
       if (alreadyScanned) return;
@@ -194,16 +280,15 @@
 
       setText("result", decodedText);
 
-      // Stop camera after scan (clear) [2](https://www.linkedin.com/posts/avery-software_buildinpublic-nocode-ai-activity-7450519046833278976-dd8s)[1](https://support.google.com/appsheet/answer/10106437?hl=en)
+      // Stop camera after scan
       html5QrcodeScanner.clear();
 
-      // Fetch details (Step 8)
+      // Fetch details
       fetchBookDetails(decodedText);
     }
 
     function onScanError(errorMessage) {
       // normal while scanning; keep silent
-      // console.warn(errorMessage);
     }
 
     const html5QrcodeScanner = new Html5QrcodeScanner(
@@ -222,7 +307,7 @@
     html5QrcodeScanner.render(onScanSuccess, onScanError);
 
     // -----------------------------
-    // STEP 9.3.1: Config in localStorage (per device)
+    // Config in localStorage (per device)
     // -----------------------------
     (function loadConfig() {
       const savedKey = localStorage.getItem("NOTION_API_KEY") || "";
@@ -247,9 +332,9 @@
     });
 
     // -----------------------------
-    // STEP 9.3.1: Save book -> Vercel Function (/api/save-book)
-    // Vercel Functions map api/*.js to /api/* endpoints. [5](https://support.google.com/appsheet/answer/15263206?hl=en)
-    // Notion create/query happen inside save-book.js using Notion API endpoints. [6](https://support.google.com/appsheet/answer/10107701?hl=en)
+    // Save book -> Vercel Function (/api/save-book)
+    // Vercel Functions: api/*.js -> /api/* utsource.com/blog/posts/how-to-commit-to-github/)
+    // Notion query/create are executed inside api/save-book.js [6](https://books.google.by/books?hl=it)
     // -----------------------------
     document.getElementById("saveBtn").addEventListener("click", async () => {
       const statusEl = document.getElementById("saveStatus");
@@ -299,7 +384,6 @@
         statusEl.innerText = "❌ Errore di rete / chiamata API";
       }
     });
-
   </script>
 </body>
 </html>
