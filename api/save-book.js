@@ -32,11 +32,10 @@ module.exports = async (req, res) => {
     cleanDatabaseId = cleanDatabaseId.split("?")[0];
     cleanDatabaseId = cleanDatabaseId.replace(/[^a-zA-Z0-9-]/g, "");
 
-    // ✅ Use legacy Notion-Version for /databases/{id}/query (deprecated in new versions)
-    // Docs note: "Query a database" is deprecated in newer versions; legacy is ok for this app. [2](https://basescripts.com/understanding-triggers-in-google-apps-script-what-they-are-and-how-to-use-them)
+    // ✅ Use legacy Notion-Version for /databases/{id}/query
     const NOTION_VERSION = "2022-06-28";
 
-    // 1) Duplicate check (Query database) [2](https://basescripts.com/understanding-triggers-in-google-apps-script-what-they-are-and-how-to-use-them)
+    // 1) Duplicate check (Query database)
     const notionQueryUrl = `https://api.notion.com/v1/databases/${cleanDatabaseId}/query`;
 
     const queryPayload = {
@@ -50,7 +49,7 @@ module.exports = async (req, res) => {
     const queryResp = await fetch(notionQueryUrl, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${notionToken}`, // Bearer auth [4](https://play.google.com/store/apps/details?id=com.sheets.barcode_scanner&hl=en)
+        "Authorization": `Bearer ${notionToken}`,
         "Notion-Version": NOTION_VERSION,
         "Content-Type": "application/json"
       },
@@ -69,7 +68,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({ status: "duplicate", existingPageId: queryJson.results[0].id });
     }
 
-    // 2) Create page (POST /v1/pages) [1](https://books.google.by/books?hl=it)
+    // 2) Create page (POST /v1/pages)
     const properties = {
       "Titolo": { title: [{ text: { content: book.title || "Senza titolo" } }] },
       "Autore": { rich_text: [{ text: { content: book.author || "" } }] },
@@ -78,9 +77,14 @@ module.exports = async (req, res) => {
       "ISBN-13": { rich_text: [{ text: { content: String(book.isbn13 || "") } }] },
       "ASIN": { rich_text: [{ text: { content: book.asin || "" } }] },
       "Descrizione": { rich_text: [{ text: { content: book.description || "" } }] },
+
       "Copertina URL": book.coverUrl ? { url: book.coverUrl } : undefined,
       "Posizione": book.location ? { select: { name: book.location } } : undefined,
-      "Lingua": book.language ? { select: { name: book.language } } : undefined
+      "Lingua": book.language ? { select: { name: book.language } } : undefined,
+
+      // ✅ DEFAULT AUTOMATICO
+      // Richiede che nel DB esista la colonna "Stato" (Select) con opzione "In casa"
+      "Stato": { select: { name: "In casa" } }
     };
 
     // Rimuove proprietà undefined
@@ -92,7 +96,7 @@ module.exports = async (req, res) => {
       properties
     };
 
-    // ✅ Page Cover automatico (così Gallery/List mostra sempre la cover)
+    // ✅ Page Cover automatico (Gallery mostra cover anche se la colonna "Cover" è vuota)
     if (book.coverUrl) {
       pageBody.cover = {
         type: "external",
@@ -103,7 +107,7 @@ module.exports = async (req, res) => {
     const createResp = await fetch("https://api.notion.com/v1/pages", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${notionToken}`, // Bearer auth [4](https://play.google.com/store/apps/details?id=com.sheets.barcode_scanner&hl=en)
+        "Authorization": `Bearer ${notionToken}`,
         "Notion-Version": NOTION_VERSION,
         "Content-Type": "application/json"
       },
