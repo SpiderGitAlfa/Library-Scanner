@@ -14,6 +14,7 @@
   <h1 style="margin-bottom: 6px;">📚 Libreria Scanner</h1>
   <p style="margin-top: 0; color: #444;">
     Scanner ISBN → Metadati → Copertina (fallback ISBN + Search) → Salvataggio in Notion
+    <br><small>Fallback metadati: Open Library → Google Books (con retry automatico se temporaneamente down)</small>
   </p>
 
   <!-- SCANNER -->
@@ -46,6 +47,7 @@
     <p style="margin: 6px 0;"><strong>Titolo:</strong> <span id="book-title">---</span></p>
     <p style="margin: 6px 0;"><strong>Autore:</strong> <span id="book-author">---</span></p>
     <p style="margin: 6px 0;"><strong>Lingua:</strong> <span id="book-language">---</span></p>
+    <p style="margin: 6px 0;"><strong>Fonte metadati:</strong> <span id="book-source">---</span></p>
     <p style="margin: 6px 0;"><strong>Cover URL (debug):</strong> <span id="book-cover-url">---</span></p>
 
     <img id="book-cover"
@@ -111,7 +113,7 @@
       return map[c] || (c ? c.toUpperCase() : "");
     }
 
-    // ---- Cover fallback (ISBN + Search) ----
+    // ---- Cover fallback (Open Library covers + search) ----
     function imageLoads(url) {
       return new Promise((resolve) => {
         const img = new Image();
@@ -177,11 +179,8 @@
       return u2 || "";
     }
 
-    async function fetchBookDetails(isbn) {
-      const url = "https://openlibrary.org/api/books"
-        + "?bibkeys=ISBN:" + encodeURIComponent(isbn)
-        + "&format=json&jscmd=data";
-
+    // -------- UI reset helpers --------
+    function resetBookUI() {
       const coverImg = document.getElementById("book-cover");
       coverImg.style.display = "none";
       coverImg.src = "";
@@ -189,41 +188,132 @@
       setText("book-title","---");
       setText("book-author","---");
       setText("book-language","---");
+      setText("book-source","---");
       setText("book-cover-url","---");
+    }
 
-      const response = await fetch(url);
-      const data = await response.json();
+    function showCover(url) {
+      const coverImg = document.getElementById("book-cover");
+      coverImg.style.display = "none";
+      coverImg.src = "";
+      if (!url) return;
 
-      const key = "ISBN:" + isbn;
-      if (!data[key]) {
-        alert("Libro non trovato su Open Library (prova ISBN diverso).");
+      coverImg.onload = () => { coverImg.style.display = "block"; };
+      coverImg.onerror = () => { coverImg.style.display = "none"; };
+      coverImg.src = url;
+    }
+
+    // -------- MAIN: Fetch details with OL -> GB fallback + auto retry on temporary --------
+    async function fetchBookDetails(isbn, gbRetryCount = 0) {
+      resetBookUI();
+      currentBook = null;
+
+      const olUrl = "https://openlibrary.org/api/books"
+        + "?bibkeys=ISBN:" + encodeURIComponent(isbn)
+        + "&format=json&jscmd=data";
+
+      try {
+        // 1) Try Open Library
+        const olResp = await fetch(olUrl);
+        const olData = await olResp.json();
+        const key = "ISBN:" + isbn;
+
+        if (olData && olData[key]) {
+          const b = olData[key];
+          const title = b.title || "";
+          const author = (b.authors && b.authors.length) ? b.authors.map(a=>a.name).join(", ") : "";
+
+          let langCode = "";
+          if (b.languages && b.languages.length && b.languages[0].key) {
+            langCode = b.languages[0].key.split("/").pop() || "";
+          }
+          const langName = langToItalianName(langCode);
+
+          setText("book-title", title || "—");
+          setText("book-author", author || "—");
+          setText("book-language", langName || "Sconosciuta");
+          setText("book-source", "Open Library");
+
+          // Cover via fallback (ISBN + Search su Open Library)
+          const bestCoverUrl = await resolveBestCoverUrl(isbn, title, author);
+          setText("book-cover-url", bestCoverUrl || "(nessuna cover trovata)");
+          showCover(bestCoverUrl);
+
+          currentBook = { isbn13: isbn, title, author, coverUrl: bestCoverUrl || "", language: langName || "" };
+          return;
+        }
+
+        // 2) Open Library MISS -> try Google Books endpoint
+        setText("book-source", "Google Books (fallback)");
+        const gbResp = await fetch(`/api/google-books?isbn=${encodeURIComponent(isbn)}`);
+        const gb = await gbResp.json();
+
+        // ✅ Patch: gestione temporary:true con retry automatico
+        if (gb && gb.temporary) {
+          setText("book-title", "Google Books temporaneamente non disponibile");
+          setText("book-author", "");
+          setText("book-language", "");
+          setText("book-cover-url", "(riprovare tra 1–2 minuti)");
+          showCover("");
+
+          // evita loop infinito: max 2 retry automatici
+          const maxAutoRetry = 2;
+          const waitMs = 90000; // 90 sec
+
+          if (gbRetryCount < maxAutoRetry) {
+            // Messaggio nella UI + retry automatico
+            const msg = gb.message || "Google Books temporaneamente non disponibile. Riprovo tra 1-2 minuti.";
+            alert(msg + `\n\nRiprovo automaticamente tra ${Math.round(waitMs/1000)} secondi...`);
+
+            setTimeout(() => {
+              fetchBookDetails(isbn, gbRetryCount + 1);
+            }, waitMs);
+          } else {
+            alert((gb.message || "Google Books temporaneamente non disponibile.")
+              + "\n\nHo già riprovato automaticamente. Puoi riprovare più tardi oppure inserire manualmente i dati in Notion (opzione A).");
+          }
+
+          // non settiamo currentBook: l'utente non può salvare finché non abbiamo dati
+          currentBook = null;
+          return;
+        }
+
+        if (gb && gb.found) {
+          const title = gb.title || "";
+          const author = gb.author || "";
+          const langName = langToItalianName(gb.language || "");
+
+          setText("book-title", title || "—");
+          setText("book-author", author || "—");
+          setText("book-language", langName || "Sconosciuta");
+          setText("book-source", "Google Books");
+
+          // Cover: preferisci Google Books coverUrl se presente, altrimenti prova Open Library cover fallback usando title/author
+          let coverUrl = gb.coverUrl || "";
+          if (!coverUrl) {
+            coverUrl = await resolveBestCoverUrl(isbn, title, author);
+          }
+
+          setText("book-cover-url", coverUrl || "(nessuna cover trovata)");
+          showCover(coverUrl);
+
+          currentBook = { isbn13: isbn, title, author, coverUrl: coverUrl || "", language: langName || "" };
+          return;
+        }
+
+        // 3) Also Google Books MISS
+        alert("Libro non trovato né su Open Library né su Google Books.");
         currentBook = null;
+        resetBookUI();
+        setText("book-source", "Nessuna");
         return;
+
+      } catch (err) {
+        console.error(err);
+        alert("Errore di rete durante la ricerca (Open Library / Google Books).");
+        currentBook = null;
+        resetBookUI();
       }
-
-      const b = data[key];
-      const title = b.title || "";
-      const author = (b.authors && b.authors.length) ? b.authors.map(a=>a.name).join(", ") : "";
-
-      let langCode = "";
-      if (b.languages && b.languages.length && b.languages[0].key) {
-        langCode = b.languages[0].key.split("/").pop() || "";
-      }
-      const langName = langToItalianName(langCode);
-
-      setText("book-title", title || "—");
-      setText("book-author", author || "—");
-      setText("book-language", langName || "Sconosciuta");
-
-      const bestCoverUrl = await resolveBestCoverUrl(isbn, title, author);
-      setText("book-cover-url", bestCoverUrl || "(nessuna cover trovata)");
-      if (bestCoverUrl) {
-        coverImg.onload = () => { coverImg.style.display = "block"; };
-        coverImg.onerror = () => { coverImg.style.display = "none"; };
-        coverImg.src = bestCoverUrl;
-      }
-
-      currentBook = { isbn13: isbn, title, author, coverUrl: bestCoverUrl || "", language: langName || "" };
     }
 
     // Scanner init
@@ -288,28 +378,45 @@
     // Save to Notion
     document.getElementById("saveBtn").addEventListener("click", async () => {
       const statusEl = document.getElementById("saveStatus");
-      if (!currentBook || !currentBook.isbn13) { statusEl.innerText = "Prima scansiona o inserisci un ISBN."; return; }
+
+      if (!currentBook || !currentBook.isbn13) {
+        statusEl.innerText = "Prima scansiona o inserisci un ISBN (e attendi che venga trovato).";
+        return;
+      }
 
       const notionToken = localStorage.getItem("NOTION_API_KEY");
       const databaseId = localStorage.getItem("NOTION_DB_ID");
-      if (!notionToken || !databaseId) { statusEl.innerText = "Config mancante: inserisci Notion API Key e Database ID."; return; }
+      if (!notionToken || !databaseId) {
+        statusEl.innerText = "Config mancante: inserisci Notion API Key e Database ID.";
+        return;
+      }
 
       const location = document.getElementById("location").value;
       statusEl.innerText = "Salvataggio in corso...";
 
-      const resp = await fetch("/api/save-book", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notionToken, databaseId, book: { ...currentBook, location } })
-      });
+      try {
+        const resp = await fetch("/api/save-book", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            notionToken,
+            databaseId,
+            book: { ...currentBook, location }
+          })
+        });
 
-      const json = await resp.json();
-      if (json.status === "duplicate") statusEl.innerText = "⚠️ Libro già presente (duplicato).";
-      else if (json.status === "created") statusEl.innerText = "✅ Salvato in Notion!";
-      else statusEl.innerText = "❌ Errore: " + (json.error || "sconosciuto");
+        const json = await resp.json();
+        if (json.status === "duplicate") statusEl.innerText = "⚠️ Libro già presente (duplicato).";
+        else if (json.status === "created") statusEl.innerText = "✅ Salvato in Notion!";
+        else statusEl.innerText = "❌ Errore: " + (json.error || "sconosciuto");
+      } catch (e) {
+        console.error(e);
+        statusEl.innerText = "❌ Errore di rete / chiamata API";
+      }
     });
 
     document.getElementById("restartBtn").addEventListener("click", () => location.reload());
   </script>
 </body>
 </html>
+``
