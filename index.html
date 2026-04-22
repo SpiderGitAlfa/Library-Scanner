@@ -1,39 +1,19 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Libreria Scanner</title>
-
-  <!-- html5-qrcode library (scanner barcode/QR) -->
-  <script src="https://unpkg.com/html5-qrcode"></script>
-</head>
-
-<body style="font-family: Arial, sans-serif; max-width: 820px; margin: 20px auto; padding: 0 12px;">
-
-  <h1 style="margin-bottom: 6px;">📚 Libreria Scanner</h1>
-  <p style="margin-top: 0; color: #444;">
-    Scanner ISBN → Metadati → Salvataggio in Notion (con fallback copertina ISBN + Search)
-  </p>
-
-  <!-- ============ SCANNER ============ -->
-  <h2 style="margin: 18px 0 10px 0;">📷 Scansiona ISBN</h2>
-  <div id="reader" style="width: 340px; margin: 10px 0;"></div>
-
-  <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
-    <div><strong>ISBN rilevato:</strong></div>
-    <div id="result" style="font-size: 18px; font-weight: bold; margin-top: 6px;">---</div>
+<!DOCTYPE html>-10 (10 caratteri)"
+           style="width: 100%; margin: 6px 0; padding: 8px;" />
+    <button id="manualIsbnBtn" style="padding: 8px 12px;">Cerca ISBN</button>
+    <span id="manualIsbnStatus" style="margin-left: 10px; font-weight: bold;"></span>
   </div>
 
   <!-- ============ DETTAGLI LIBRO ============ -->
   <hr style="margin: 18px 0;">
 
-  <h2 style="margin: 0 0 10px 0;">📖 Dettagli libro (Open Library)</h2>
+  <h2 style="margin: 0 0 10px 0;">📖 Dettagli libro</h2>
 
   <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
     <p style="margin: 6px 0;"><strong>Titolo:</strong> <span id="book-title">---</span></p>
     <p style="margin: 6px 0;"><strong>Autore:</strong> <span id="book-author">---</span></p>
     <p style="margin: 6px 0;"><strong>Lingua:</strong> <span id="book-language">---</span></p>
+    <p style="margin: 6px 0;"><strong>Cover URL (debug):</strong> <span id="book-cover-url">---</span></p>
 
     <img id="book-cover"
          src=""
@@ -55,13 +35,14 @@
     <label><strong>Database ID:</strong></label><br>
     <input id="dbId" type="text"
            style="width: 100%; margin: 6px 0; padding: 8px;"
-           placeholder="349bbbf581dc805dabf2d72448ddd44e" />
+           placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
 
     <button id="saveConfigBtn" style="padding: 8px 12px;">Salva configurazione</button>
+    <button id="clearConfigBtn" style="padding: 8px 12px; margin-left: 8px;">Reset config</button>
     <span id="configStatus" style="margin-left: 10px; font-weight: bold;"></span>
 
     <p style="color:#666; margin-top:10px;">
-      La configurazione viene salvata nel browser (localStorage). Su ogni device va fatta una volta.
+      Salvo API key + Database ID in localStorage (solo su questo device/browser).
     </p>
   </div>
 
@@ -80,6 +61,7 @@
     </select>
 
     <button id="saveBtn" style="margin-left:10px; padding: 8px 12px;">Salva in Notion</button>
+    <button id="restartBtn" style="margin-left:10px; padding: 8px 12px;">🔄 Nuova scansione</button>
 
     <p id="saveStatus" style="margin-top:10px; font-weight:bold;"></p>
   </div>
@@ -91,11 +73,18 @@
     let alreadyScanned = false;
     let currentBook = null;
 
+    // -----------------------------
+    // Helpers
+    // -----------------------------
     function setText(id, value) {
       document.getElementById(id).innerText = value;
     }
 
-    // Convert language code to Italian readable name (basic)
+    function normalizeIsbn(s) {
+      // mantiene solo cifre e X (per ISBN-10)
+      return String(s || "").replace(/[^0-9Xx]/g, "").toUpperCase();
+    }
+
     function langToItalianName(code) {
       const c = String(code || "").toLowerCase().trim();
       const map = {
@@ -111,10 +100,9 @@
 
     // -----------------------------
     // COVER FALLBACK: ISBN + Search (Open Library)
-    // Covers API pattern + ?default=false (404 if missing) [2](https://discuss.google.dev/t/convert-list-of-numbers-from-longtext-field-to-number/179392)
-    // Search API via /search.json (part of Open Library APIs) [3](https://www.amazon.com/1984/dp/8804668237)[1](https://internetarchive.github.io/openlibrary-api/)
     // -----------------------------
     function imageLoads(url) {
+      // senza CORS: Image() + onload/onerror
       return new Promise((resolve) => {
         const img = new Image();
         img.onload = () => resolve(true);
@@ -154,7 +142,7 @@
 
       if (!data || !data.docs || !data.docs.length) return "";
 
-      // Prefer cover_i (id) first
+      // 1) preferisci cover_i
       for (const d of data.docs) {
         if (d.cover_i) {
           const u = coverUrlById(d.cover_i, "L");
@@ -162,7 +150,7 @@
         }
       }
 
-      // Then try ISBNs returned by search
+      // 2) altrimenti prova ISBN alternativi
       for (const d of data.docs) {
         if (Array.isArray(d.isbn) && d.isbn.length) {
           for (const i of d.isbn.slice(0, 12)) {
@@ -199,8 +187,7 @@
     }
 
     // -----------------------------
-    // STEP 8: Fetch book details from Open Library Books API
-    // Books API endpoint: /api/books?bibkeys=...&format=json&jscmd=data [1](https://internetarchive.github.io/openlibrary-api/)
+    // FETCH METADATI (Open Library)
     // -----------------------------
     async function fetchBookDetails(isbn) {
       const url =
@@ -209,28 +196,27 @@
         "&format=json" +
         "&jscmd=data";
 
+      const coverImg = document.getElementById("book-cover");
+      coverImg.style.display = "none";
+      coverImg.src = "";
+
+      setText("book-title", "---");
+      setText("book-author", "---");
+      setText("book-language", "---");
+      setText("book-cover-url", "---");
+
       try {
         const response = await fetch(url);
         const data = await response.json();
 
         const key = "ISBN:" + isbn;
-
-        // Reset UI
-        setText("book-title", "---");
-        setText("book-author", "---");
-        setText("book-language", "---");
-        const coverImg = document.getElementById("book-cover");
-        coverImg.style.display = "none";
-        coverImg.src = "";
-
         if (!data[key]) {
-          alert("Libro non trovato su Open Library.");
+          alert("Libro non trovato su Open Library (prova ISBN diverso).");
           currentBook = null;
           return;
         }
 
         const book = data[key];
-
         const title = book.title || "";
         const author = (book.authors && book.authors.length)
           ? book.authors.map(a => a.name).join(", ")
@@ -246,8 +232,9 @@
         setText("book-author", author || "—");
         setText("book-language", langName || "Sconosciuta");
 
-        // ✅ Resolve cover with fallback ISBN + Search
+        // ✅ cover fallback (ISBN + Search)
         const bestCoverUrl = await resolveBestCoverUrl(isbn, title, author);
+        setText("book-cover-url", bestCoverUrl || "(nessuna cover trovata)");
 
         if (bestCoverUrl) {
           coverImg.onload = () => { coverImg.style.display = "block"; };
@@ -255,11 +242,10 @@
           coverImg.src = bestCoverUrl;
         }
 
-        // Save currentBook state (for Step 9 save)
         currentBook = {
           isbn13: isbn,
-          title: title,
-          author: author,
+          title,
+          author,
           coverUrl: bestCoverUrl || "",
           language: langName || ""
         };
@@ -272,30 +258,30 @@
     }
 
     // -----------------------------
-    // Scanner callbacks (html5-qrcode) [4](https://siemensenergyag-my.sharepoint.com/personal/heider_castro_siemens-energy_com/Documents/File%20chat%20di%20Microsoft%20Copilot/README_LIBRERIA_SCANNER%202.md)
+    // SCANNER (camera + file upload UI)
     // -----------------------------
-    function onScanSuccess(decodedText, decodedResult) {
+    function onScanSuccess(decodedText) {
       if (alreadyScanned) return;
       alreadyScanned = true;
 
-      setText("result", decodedText);
+      const isbn = normalizeIsbn(decodedText);
+      setText("result", isbn);
 
-      // Stop camera after scan
+      // ferma la camera
       html5QrcodeScanner.clear();
 
-      // Fetch details
-      fetchBookDetails(decodedText);
+      // carica dettagli
+      fetchBookDetails(isbn);
     }
 
-    function onScanError(errorMessage) {
-      // normal while scanning; keep silent
-    }
+    function onScanError(_) { /* silenzioso */ }
 
     const html5QrcodeScanner = new Html5QrcodeScanner(
       "reader",
       {
         fps: 10,
         qrbox: { width: 260, height: 160 },
+        rememberLastUsedCamera: true,
         formatsToSupport: [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8
@@ -303,17 +289,18 @@
       },
       false
     );
-
     html5QrcodeScanner.render(onScanSuccess, onScanError);
 
     // -----------------------------
-    // Config in localStorage (per device)
+    // CONFIG localStorage
     // -----------------------------
     (function loadConfig() {
       const savedKey = localStorage.getItem("NOTION_API_KEY") || "";
       const savedDb  = localStorage.getItem("NOTION_DB_ID") || "";
+      const savedLoc = localStorage.getItem("LAST_LOCATION") || "Milano";
       document.getElementById("notionKey").value = savedKey;
       document.getElementById("dbId").value = savedDb;
+      document.getElementById("location").value = savedLoc;
     })();
 
     document.getElementById("saveConfigBtn").addEventListener("click", () => {
@@ -331,16 +318,48 @@
       status.innerText = "✅ Salvato";
     });
 
+    document.getElementById("clearConfigBtn").addEventListener("click", () => {
+      localStorage.removeItem("NOTION_API_KEY");
+      localStorage.removeItem("NOTION_DB_ID");
+      document.getElementById("notionKey").value = "";
+      document.getElementById("dbId").value = "";
+      document.getElementById("configStatus").innerText = "🧹 Resettato";
+    });
+
+    // salva ultima location scelta (comodissimo)
+    document.getElementById("location").addEventListener("change", (e) => {
+      localStorage.setItem("LAST_LOCATION", e.target.value);
+    });
+
     // -----------------------------
-    // Save book -> Vercel Function (/api/save-book)
-    // Vercel Functions: api/*.js -> /api/* utsource.com/blog/posts/how-to-commit-to-github/)
-    // Notion query/create are executed inside api/save-book.js [6](https://books.google.by/books?hl=it)
+    // ISBN manuale (Opzione B)
+    // -----------------------------
+    document.getElementById("manualIsbnBtn").addEventListener("click", async () => {
+      const status = document.getElementById("manualIsbnStatus");
+      const input = document.getElementById("manualIsbn");
+      const isbn = normalizeIsbn(input.value);
+
+      status.innerText = "";
+
+      if (!(isbn.length === 10 || isbn.length === 13)) {
+        status.innerText = "⚠️ Inserisci 10 o 13 caratteri";
+        return;
+      }
+
+      setText("result", isbn);
+      status.innerText = "🔎 Cerco...";
+      await fetchBookDetails(isbn);
+      status.innerText = "✅ OK";
+    });
+
+    // -----------------------------
+    // Save to Notion (/api/save-book)
     // -----------------------------
     document.getElementById("saveBtn").addEventListener("click", async () => {
       const statusEl = document.getElementById("saveStatus");
 
       if (!currentBook || !currentBook.isbn13) {
-        statusEl.innerText = "Prima scansiona un libro.";
+        statusEl.innerText = "Prima scansiona o inserisci un ISBN.";
         return;
       }
 
@@ -384,7 +403,48 @@
         statusEl.innerText = "❌ Errore di rete / chiamata API";
       }
     });
+
+    // -----------------------------
+    // Restart / nuova scansione
+    // -----------------------------
+    document.getElementById("restartBtn").addEventListener("click", () => {
+      // ricarica la pagina (modo più stabile su iPhone per riavviare la camera)
+      location.reload();
+    });
   </script>
 </body>
 </html>
 ``
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Libreria Scanner</title>
+
+  <!-- html5-qrcode library -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+
+<body style="font-family: Arial, sans-serif; max-width: 820px; margin: 20px auto; padding: 0 12px;">
+
+  <h1 style="margin-bottom: 6px;">📚 Libreria Scanner</h1>
+  <p style="margin-top: 0; color: #444;">
+    Scanner ISBN → Metadati → Copertina (fallback ISBN + Search) → Salvataggio in Notion
+  </p>
+
+  <!-- ============ SCANNER ============ -->
+  <h2 style="margin: 18px 0 10px 0;">📷 Scansiona ISBN</h2>
+  <div id="reader" style="width: 340px; margin: 10px 0;"></div>
+
+  <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <div><strong>ISBN rilevato:</strong></div>
+    <div id="result" style="font-size: 18px; font-weight: bold; margin-top: 6px;">---</div>
+  </div>
+
+  <!-- ============ ISBN MANUALE (OPZIONE B) ============ -->
+  <hr style="margin: 18px 0;">
+
+  <h2 style="margin: 0 0 10px 0;">⌨️ ISBN manuale (se lo scanner non legge)</h2>
+  <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <input id="manualIsbn" type="text"
+           inputmode="numeric"
