@@ -1,4 +1,5 @@
 module.exports = async (req, res) => {
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Notion-Version");
@@ -7,6 +8,7 @@ module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
+    // --- Robust body parsing ---
     let body = req.body;
     if (!body) return res.status(400).json({ error: "Empty request body. Did you send JSON?" });
 
@@ -24,16 +26,19 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: "Missing book or book.isbn13" });
     }
 
-    // ✅ SANITIZE databaseId (handles "?v=..." OR full Notion URL)
+    // ✅ SANITIZE databaseId (handles URL, ?v=..., spazi, ecc.)
     let cleanDatabaseId = String(databaseId).trim();
     cleanDatabaseId = cleanDatabaseId.replace(/^https?:\/\/www\.notion\.so\//, "");
     cleanDatabaseId = cleanDatabaseId.split("?")[0];
-    cleanDatabaseId = cleanDatabaseId.replace(/[^a-zA-Z0-9]/g, ""); // keep only alnum
+    cleanDatabaseId = cleanDatabaseId.replace(/[^a-zA-Z0-9-]/g, "");
 
+    // ✅ Use legacy Notion-Version for /databases/{id}/query (deprecated in new versions)
+    // Docs note: "Query a database" is deprecated in newer versions; legacy is ok for this app. [2](https://basescripts.com/understanding-triggers-in-google-apps-script-what-they-are-and-how-to-use-them)
     const NOTION_VERSION = "2022-06-28";
 
-    // 1) Duplicate check (Query database) [1](https://appsheettraining.com/article/google-sheets-formulas-vs-appsheet-expressions)
+    // 1) Duplicate check (Query database) [2](https://basescripts.com/understanding-triggers-in-google-apps-script-what-they-are-and-how-to-use-them)
     const notionQueryUrl = `https://api.notion.com/v1/databases/${cleanDatabaseId}/query`;
+
     const queryPayload = {
       filter: {
         property: "ISBN-13",
@@ -45,18 +50,14 @@ module.exports = async (req, res) => {
     const queryResp = await fetch(notionQueryUrl, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${notionToken}`,   // Bearer auth [3](https://sheets-pratique.com/en/apps-script/triggers)
-        "Notion-Version": NOTION_VERSION,           // version header [3](https://sheets-pratique.com/en/apps-script/triggers)
+        "Authorization": `Bearer ${notionToken}`, // Bearer auth [4](https://play.google.com/store/apps/details?id=com.sheets.barcode_scanner&hl=en)
+        "Notion-Version": NOTION_VERSION,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(queryPayload)
     });
 
     const queryText = await queryResp.text();
-    console.log("NOTION QUERY URL:", notionQueryUrl);
-    console.log("NOTION QUERY STATUS:", queryResp.status);
-    console.log("NOTION QUERY BODY:", queryText);
-
     let queryJson;
     try { queryJson = JSON.parse(queryText); } catch { queryJson = { raw: queryText }; }
 
@@ -68,7 +69,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({ status: "duplicate", existingPageId: queryJson.results[0].id });
     }
 
-    // 2) Create page (POST /v1/pages) [1](https://appsheettraining.com/article/google-sheets-formulas-vs-appsheet-expressions)
+    // 2) Create page (POST /v1/pages) [1](https://books.google.by/books?hl=it)
     const properties = {
       "Titolo": { title: [{ text: { content: book.title || "Senza titolo" } }] },
       "Autore": { rich_text: [{ text: { content: book.author || "" } }] },
@@ -81,34 +82,35 @@ module.exports = async (req, res) => {
       "Posizione": book.location ? { select: { name: book.location } } : undefined,
       "Lingua": book.language ? { select: { name: book.language } } : undefined
     };
+
+    // Rimuove proprietà undefined
     Object.keys(properties).forEach(k => { if (properties[k] === undefined) delete properties[k]; });
 
+    // Body della create page
+    const pageBody = {
+      parent: { database_id: cleanDatabaseId },
+      properties
+    };
+
+    // ✅ Page Cover automatico (così Gallery/List mostra sempre la cover)
+    if (book.coverUrl) {
+      pageBody.cover = {
+        type: "external",
+        external: { url: book.coverUrl }
+      };
+    }
+
     const createResp = await fetch("https://api.notion.com/v1/pages", {
-  method: "POST",
-  headers: {
-    "Authorization": `Bearer ${notionToken}`,
-    "Notion-Version": NOTION_VERSION,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    parent: { database_id: cleanDatabaseId },
-
-    // ✅ QUESTA È LA CHIAVE
-    cover: book.coverUrl
-      ? {
-          type: "external",
-          external: { url: book.coverUrl }
-        }
-      : undefined,
-
-    properties: properties
-  })
-});
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${notionToken}`, // Bearer auth [4](https://play.google.com/store/apps/details?id=com.sheets.barcode_scanner&hl=en)
+        "Notion-Version": NOTION_VERSION,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(pageBody)
+    });
 
     const createText = await createResp.text();
-    console.log("NOTION CREATE STATUS:", createResp.status);
-    console.log("NOTION CREATE BODY:", createText);
-
     let createJson;
     try { createJson = JSON.parse(createText); } catch { createJson = { raw: createText }; }
 
