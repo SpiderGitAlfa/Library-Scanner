@@ -18,40 +18,16 @@
   </p>
 
   <!-- SCANNER -->
-// Initialize the scanner with optimized settings
-const html5QrCode = new Html5Qrcode("reader");
+<h2 style="margin: 18px 0 10px 0;">📷 Scan ISBN</h2>
+<div id="reader" style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden;"></div>
 
-const config = { 
-  fps: 10,                               // Higher FPS for faster detection
-  qrbox: { width: 280, height: 150 },    // Rectangle shape for barcodes
-  aspectRatio: 1.777778,                 // Wide aspect ratio for mobile
-  experimentalFeatures: {
-    useBarCodeDetectorIfSupported: true  // Uses hardware acceleration if available
-  },
-  videoConstraints: {
-    width: { min: 1280, ideal: 1920 },    // Force high resolution for sharp lines
-    height: { min: 720, ideal: 1080 },
-    facingMode: "environment"            // Always use back camera
-  }
-};
+<div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+  <div><strong>Detected ISBN:</strong></div>
+  <div id="result" style="font-size: 18px; font-weight: bold; margin-top: 6px; color: #666;">---</div>
+</div>
 
-// Start scanning and only look for EAN-13 (ISBN)
-html5QrCode.start(
-  { facingMode: "environment" }, 
-  config,
-  (decodedText) => {
-    // Only update if it's a valid 13-digit ISBN
-    if (decodedText.length === 13) {
-      document.getElementById("result").innerText = decodedText;
-      // Optional: Add a "Beep" or Vibrate here
-    }
-  },
-  (errorMessage) => {
-    // Suppress constant console errors during scanning
-  }
-).catch((err) => {
-  console.error("Camera failed to start:", err);
-});
+<script src="https://unpkg.com"></script>
+<script>
 
   <!-- MANUAL ISBN -->
   <hr style="margin: 18px 0;">
