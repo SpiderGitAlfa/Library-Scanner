@@ -4,8 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Library Scanner</title>
-
-  <!-- Barcode scanner library -->
   <script src="https://unpkg.com/html5-qrcode"></script>
 </head>
 
@@ -14,30 +12,30 @@
   <h1 style="margin-bottom: 6px;">📚 Library Scanner</h1>
   <p style="margin-top: 0; color: #444;">
     Scan ISBN → Metadata → Cover → Save to Notion
-    <br><small>Metadata fallback: Open Library → Google Books (auto-retry if temporarily unavailable)</small>
+    <br><small>Fallback: Open Library → Google Books (auto-retry if temporarily unavailable)</small>
   </p>
 
   <!-- SCANNER -->
-<!-- SCANNER -->
-<h2 style="margin: 18px 0 10px 0;">📷 Scan ISBN</h2>
-<div id="reader" style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden;"></div>
+  <h2 style="margin: 18px 0 10px 0;">📷 Scan ISBN</h2>
+  <div id="reader" style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden;"></div>
 
-<div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
-  <div><strong>Detected ISBN:</strong></div>
-  <div id="result" style="font-size: 18px; font-weight: bold; margin-top: 6px; color: #666;">---</div>
-</div>
-
-<script src="https://unpkg.com"></script>
-<script>
-</script>
-
+  <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <div><strong>Detected ISBN:</strong></div>
+    <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
+      <div id="result" style="font-size: 18px; font-weight: bold; color: #666;">---</div>
+      <div id="scanStatus" style="font-size: 14px; font-weight: bold; color:#666;"></div>
+    </div>
+    <div style="margin-top:6px; font-size: 12px; color:#666;">
+      Tip: hold the phone a bit farther away; keep the barcode inside the box.
+    </div>
+  </div>
 
   <!-- MANUAL ISBN -->
   <hr style="margin: 18px 0;">
   <h2 style="margin: 0 0 10px 0;">⌨️ Manual ISBN (if scanner fails)</h2>
   <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
-    <input id="manualIsbn" type="text" inputmode="numeric"
-           placeholder="Enter ISBN-13 (13 digits) or ISBN-10 (10 chars)"
+    <input id="manualIsbn" type="text" inputmode="text" autocapitalize="characters"
+           placeholder="Enter ISBN-13 (13 digits) or ISBN-10 (10 chars, X allowed)"
            style="width: 100%; margin: 6px 0; padding: 8px;" />
     <button id="manualIsbnBtn" style="padding: 8px 12px;">Lookup ISBN</button>
     <span id="manualIsbnStatus" style="margin-left: 10px; font-weight: bold;"></span>
@@ -57,13 +55,11 @@
          style="max-width: 220px; margin-top: 10px; display: none; border: 1px solid #eee; border-radius: 6px;">
   </div>
 
-  <!-- CONFIG (AUTO-HIDE + TOGGLE + BADGE) -->
+  <!-- SETTINGS -->
   <hr style="margin: 18px 0;">
   <h2 style="margin: 0 0 10px 0;">⚙️ Settings (one-time per device)</h2>
 
-  <button id="toggleConfigBtn" style="padding: 6px 10px; margin-bottom: 10px;">
-    Show settings
-  </button>
+  <button id="toggleConfigBtn" style="padding: 6px 10px; margin-bottom: 10px;">Show settings</button>
   <span id="configBadge" style="margin-left: 10px; font-weight: bold;"></span>
 
   <div id="configPanel" style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
@@ -105,14 +101,17 @@
   </div>
 
   <script>
-    // -----------------------------
-    // Global state
-    // -----------------------------
     let alreadyScanned = false;
     let currentBook = null;
 
     function setText(id, value) { document.getElementById(id).innerText = value; }
-    function normalizeIsbn(s) { return String(s || "").replace(/[^0-9Xx]/g, "").toUpperCase(); }
+    function digitsOnly(s) { return String(s || "").replace(/\D/g, ""); }
+    function digitsOrXOnly(s) { return String(s || "").toUpperCase().replace(/[^0-9X]/g, ""); }
+
+    function sanitizeUrl(u) {
+      if (!u) return "";
+      return String(u).replace(/&amp;/g, "&").replace(/^http:\/\//i, "https://").trim();
+    }
 
     function langToName(code) {
       const c = String(code || "").toLowerCase().trim();
@@ -120,14 +119,7 @@
       return map[c] || (c ? c.toUpperCase() : "");
     }
 
-    function sanitizeUrl(u) {
-      if (!u) return "";
-      return String(u).replace(/&amp;/g, "&").replace(/^http:\/\//i, "https://").trim();
-    }
-
-    // -----------------------------
-    // Settings panel hide/show + badge
-    // -----------------------------
+    // Settings UI
     function hasSavedConfig() {
       const k = (localStorage.getItem("NOTION_API_KEY") || "").trim();
       const d = (localStorage.getItem("NOTION_DB_ID") || "").trim();
@@ -144,7 +136,6 @@
     function updateConfigBadge() {
       const badge = document.getElementById("configBadge");
       if (!badge) return;
-
       if (hasSavedConfig()) {
         badge.innerText = "Settings saved ✅";
         badge.style.color = "green";
@@ -154,9 +145,64 @@
       }
     }
 
-    // -----------------------------
-    // Cover fallback (Open Library covers + search)
-    // -----------------------------
+    // Scan UI
+    function setScanUI(text, statusText, color) {
+      const resultEl = document.getElementById("result");
+      const statusEl = document.getElementById("scanStatus");
+      resultEl.innerText = text;
+      resultEl.style.color = color || "#666";
+      statusEl.innerText = statusText || "";
+      statusEl.style.color = color || "#666";
+    }
+
+    // ISBN-13 (EAN-13) checksum
+    function isValidEan13(ean13) {
+      const s = digitsOnly(ean13);
+      if (s.length !== 13) return false;
+      let sum = 0;
+      for (let i = 0; i < 12; i++) {
+        const d = parseInt(s[i], 10);
+        sum += (i % 2 === 0) ? d : d * 3;
+      }
+      const check = (10 - (sum % 10)) % 10;
+      return check === parseInt(s[12], 10);
+    }
+
+    function looksLikeIsbn13(isbn13) {
+      const s = digitsOnly(isbn13);
+      return s.length === 13 && (s.startsWith("978") || s.startsWith("979"));
+    }
+
+    // ISBN-10 checksum (mod 11)
+    function isValidIsbn10(isbn10Raw) {
+      const s = digitsOrXOnly(isbn10Raw);
+      if (s.length !== 10) return false;
+      let sum = 0;
+      for (let i = 0; i < 10; i++) {
+        const ch = s[i];
+        const val = (ch === "X") ? 10 : parseInt(ch, 10);
+        if (Number.isNaN(val)) return false;
+        sum += val * (10 - i);
+      }
+      return (sum % 11) === 0;
+    }
+
+    function normalizeScannedIsbn(decodedText) {
+      const raw = String(decodedText || "").trim();
+      const d = digitsOnly(raw);
+      const ok13 = (d.length === 13) && looksLikeIsbn13(d) && isValidEan13(d);
+      const ok10 = isValidIsbn10(raw);
+
+      if (ok13) return { ok: true, isbn: d, kind: "ISBN-13" };
+      if (ok10) return { ok: true, isbn: digitsOrXOnly(raw), kind: "ISBN-10" };
+
+      if (d.length === 13 && isValidEan13(d) && !looksLikeIsbn13(d)) {
+        return { ok: false, isbn: d, reason: "EAN-13 but not a book ISBN" };
+      }
+      return { ok: false, isbn: d || raw, reason: "Invalid / unreadable" };
+    }
+
+    // Cover fallback
     function imageLoads(url) {
       return new Promise((resolve) => {
         const img = new Image();
@@ -249,7 +295,6 @@
       coverImg.src = url;
     }
 
-    // Open Library → Google Books fallback
     async function fetchBookDetails(isbn, gbRetryCount = 0) {
       resetBookUI();
       currentBook = null;
@@ -307,7 +352,7 @@
             setTimeout(() => fetchBookDetails(isbn, gbRetryCount + 1), waitMs);
           } else {
             alert((gb.message || "Google Books temporarily unavailable.")
-              + "\n\nAuto-retry already attempted. Try again later or enter manually in Notion.");
+              + "\n\nAuto-retry already attempted. Try again later or enter manually.");
           }
           return;
         }
@@ -340,29 +385,46 @@
       }
     }
 
-    // Scanner integration
-    function onScanSuccess(decodedText) {
-      if (alreadyScanned) return;
-      alreadyScanned = true;
+    // Improved scanner setup
+    async function onScanSuccess(decodedText, decodedResult) {
+      const r = normalizeScannedIsbn(decodedText);
 
-      const isbn = normalizeIsbn(decodedText);
-      setText("result", isbn);
+      if (r.ok) {
+        setScanUI(r.isbn, `✅ Perfect scan (${r.kind})`, "green");
+        try { if (navigator.vibrate) navigator.vibrate(60); } catch (_) {}
 
-      html5QrcodeScanner.clear();
-      fetchBookDetails(isbn);
+        if (!alreadyScanned) {
+          alreadyScanned = true;
+          try { await html5QrcodeScanner.clear(); } catch (_) {}
+          fetchBookDetails(r.isbn);
+        }
+      } else {
+        setScanUI(r.isbn || "---", `❌ ${r.reason} → use manual entry`, "red");
+      }
     }
+
     function onScanError(_) {}
 
     const html5QrcodeScanner = new Html5QrcodeScanner(
       "reader",
       {
-        fps: 10,
-        qrbox: { width: 260, height: 160 },
+        fps: 12,
+        qrbox: { width: 280, height: 160 },
         rememberLastUsedCamera: true,
-        formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8]
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8
+        ],
+        videoConstraints: {
+          facingMode: { ideal: "environment" },
+          width:  { min: 640, ideal: 1920, max: 1920 },
+          height: { min: 480, ideal: 1080, max: 1080 }
+        }
       },
       false
     );
+
+    setScanUI("---", "Scanning…", "#666");
     html5QrcodeScanner.render(onScanSuccess, onScanError);
 
     // Load config + auto-hide + badge
@@ -370,19 +432,16 @@
       document.getElementById("notionKey").value = localStorage.getItem("NOTION_API_KEY") || "";
       document.getElementById("dbId").value = localStorage.getItem("NOTION_DB_ID") || "";
       document.getElementById("location").value = localStorage.getItem("LAST_LOCATION") || "Milano";
-
       setConfigPanelVisible(!hasSavedConfig());
       updateConfigBadge();
     });
 
-    // Toggle
     document.getElementById("toggleConfigBtn").addEventListener("click", () => {
       const panel = document.getElementById("configPanel");
       const isVisible = panel.style.display !== "none";
       setConfigPanelVisible(!isVisible);
     });
 
-    // Save config
     document.getElementById("saveConfigBtn").addEventListener("click", () => {
       const key = document.getElementById("notionKey").value.trim();
       const db = document.getElementById("dbId").value.trim();
@@ -398,7 +457,6 @@
       setTimeout(() => setConfigPanelVisible(false), 50);
     });
 
-    // Reset config
     document.getElementById("clearConfigBtn").addEventListener("click", () => {
       localStorage.removeItem("NOTION_API_KEY");
       localStorage.removeItem("NOTION_DB_ID");
@@ -413,22 +471,30 @@
       localStorage.setItem("LAST_LOCATION", e.target.value);
     });
 
-    // Manual ISBN
     document.getElementById("manualIsbnBtn").addEventListener("click", async () => {
       const status = document.getElementById("manualIsbnStatus");
-      const isbn = normalizeIsbn(document.getElementById("manualIsbn").value);
+      const raw = document.getElementById("manualIsbn").value;
+      const cleaned = digitsOrXOnly(raw);
       status.innerText = "";
-      if (!(isbn.length === 10 || isbn.length === 13)) {
-        status.innerText = "⚠️ Enter 10 or 13 chars";
+
+      const ok13 = (digitsOnly(cleaned).length === 13) && isValidEan13(cleaned) && looksLikeIsbn13(cleaned);
+      const ok10 = isValidIsbn10(cleaned);
+
+      if (!ok13 && !ok10) {
+        status.innerText = "⚠️ Enter a valid ISBN-10 or ISBN-13";
         return;
       }
-      setText("result", isbn);
+
+      const finalIsbn = ok13 ? digitsOnly(cleaned) : cleaned;
+
+      setText("result", finalIsbn);
+      setScanUI(finalIsbn, "Manual lookup", "#666");
+
       status.innerText = "🔎 Searching...";
-      await fetchBookDetails(isbn);
+      await fetchBookDetails(finalIsbn);
       status.innerText = "✅ Done";
     });
 
-    // Save to Notion
     document.getElementById("saveBtn").addEventListener("click", async () => {
       const statusEl = document.getElementById("saveStatus");
 
@@ -439,6 +505,7 @@
 
       const notionToken = localStorage.getItem("NOTION_API_KEY");
       const databaseId = localStorage.getItem("NOTION_DB_ID");
+
       if (!notionToken || !databaseId) {
         statusEl.innerText = "Missing config: set Notion API Key + Database ID.";
         setConfigPanelVisible(true);
@@ -477,4 +544,549 @@
   </script>
 </body>
 </html>
-``
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Library Scanner</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+
+<body style="font-family: Arial, sans-serif; max-width: 820px; margin: 20px auto; padding: 0 12px;">
+
+  <h1 style="margin-bottom: 6px;">📚 Library Scanner</h1>
+  <p style="margin-top: 0; color: #444;">
+    Scan ISBN → Metadata → Cover → Save to Notion
+    <br><small>Fallback: Open Library → Google Books (auto-retry if temporarily unavailable)</small>
+  </p>
+
+  <!-- SCANNER -->
+  <h2 style="margin: 18px 0 10px 0;">📷 Scan ISBN</h2>
+  <div id="reader" style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden;"></div>
+
+  <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <div><strong>Detected ISBN:</strong></div>
+    <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
+      <div id="result" style="font-size: 18px; font-weight: bold; color: #666;">---</div>
+      <div id="scanStatus" style="font-size: 14px; font-weight: bold; color:#666;"></div>
+    </div>
+    <div style="margin-top:6px; font-size: 12px; color:#666;">
+      Tip: hold the phone a bit farther away; keep the barcode inside the box.
+    </div>
+  </div>
+
+  <!-- MANUAL ISBN -->
+  <hr style="margin: 18px 0;">
+  <h2 style="margin: 0 0 10px 0;">⌨️ Manual ISBN (if scanner fails)</h2>
+  <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <input id="manualIsbn" type="text" inputmode="text" autocapitalize="characters"
+           placeholder="Enter ISBN-13 (13 digits) or ISBN-10 (10 chars, X allowed)"
+           style="width: 100%; margin: 6px 0; padding: 8px;" />
+    <button id="manualIsbnBtn" style="padding: 8px 12px;">Lookup ISBN</button>
+    <span id="manualIsbnStatus" style="margin-left: 10px; font-weight: bold;"></span>
+  </div>
+
+  <!-- DETAILS -->
+  <hr style="margin: 18px 0;">
+  <h2 style="margin: 0 0 10px 0;">📖 Book details</h2>
+  <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <p style="margin: 6px 0;"><strong>Title:</strong> <span id="book-title">---</span></p>
+    <p style="margin: 6px 0;"><strong>Author:</strong> <span id="book-author">---</span></p>
+    <p style="margin: 6px 0;"><strong>Language:</strong> <span id="book-language">---</span></p>
+    <p style="margin: 6px 0;"><strong>Source:</strong> <span id="book-source">---</span></p>
+    <p style="margin: 6px 0;"><strong>Cover URL (debug):</strong> <span id="book-cover-url">---</span></p>
+
+    <img id="book-cover" src="" alt="Book cover"
+         style="max-width: 220px; margin-top: 10px; display: none; border: 1px solid #eee; border-radius: 6px;">
+  </div>
+
+  <!-- SETTINGS -->
+  <hr style="margin: 18px 0;">
+  <h2 style="margin: 0 0 10px 0;">⚙️ Settings (one-time per device)</h2>
+
+  <button id="toggleConfigBtn" style="padding: 6px 10px; margin-bottom: 10px;">Show settings</button>
+  <span id="configBadge" style="margin-left: 10px; font-weight: bold;"></span>
+
+  <div id="configPanel" style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <label><strong>Notion API Key:</strong></label><br>
+    <input id="notionKey" type="password"
+           style="width: 100%; margin: 6px 0; padding: 8px;"
+           placeholder="ntn_... or secret_..." />
+
+    <label><strong>Database ID:</strong></label><br>
+    <input id="dbId" type="text"
+           style="width: 100%; margin: 6px 0; padding: 8px;"
+           placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+
+    <button id="saveConfigBtn" style="padding: 8px 12px;">Save config</button>
+    <button id="clearConfigBtn" style="padding: 8px 12px; margin-left: 8px;">Reset config</button>
+    <span id="configStatus" style="margin-left: 10px; font-weight: bold;"></span>
+
+    <p style="color:#666; margin-top:10px;">
+      Stored in localStorage on this device/browser only.
+    </p>
+  </div>
+
+  <!-- SAVE -->
+  <hr style="margin: 18px 0;">
+  <h2 style="margin: 0 0 10px 0;">💾 Save to Notion</h2>
+  <div style="padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <label for="location"><strong>Location:</strong></label>
+    <select id="location" style="margin-left: 6px; padding: 6px;">
+      <option value="Milano">Milano</option>
+      <option value="Montigiano">Montigiano</option>
+      <option value="Kindle">Kindle</option>
+      <option value="Bimbi">Bimbi</option>
+    </select>
+
+    <button id="saveBtn" style="margin-left:10px; padding: 8px 12px;">Save in Notion</button>
+    <button id="restartBtn" style="margin-left:10px; padding: 8px 12px;">🔄 New scan</button>
+
+    <p id="saveStatus" style="margin-top:10px; font-weight:bold;"></p>
+  </div>
+
+  <script>
+    let alreadyScanned = false;
+    let currentBook = null;
+
+    function setText(id, value) { document.getElementById(id).innerText = value; }
+    function digitsOnly(s) { return String(s || "").replace(/\D/g, ""); }
+    function digitsOrXOnly(s) { return String(s || "").toUpperCase().replace(/[^0-9X]/g, ""); }
+
+    function sanitizeUrl(u) {
+      if (!u) return "";
+      return String(u).replace(/&amp;/g, "&").replace(/^http:\/\//i, "https://").trim();
+    }
+
+    function langToName(code) {
+      const c = String(code || "").toLowerCase().trim();
+      const map = { it:"Italian", en:"English", de:"German", es:"Spanish", fr:"French", pt:"Portuguese" };
+      return map[c] || (c ? c.toUpperCase() : "");
+    }
+
+    // Settings UI
+    function hasSavedConfig() {
+      const k = (localStorage.getItem("NOTION_API_KEY") || "").trim();
+      const d = (localStorage.getItem("NOTION_DB_ID") || "").trim();
+      return !!(k && d);
+    }
+
+    function setConfigPanelVisible(visible) {
+      const panel = document.getElementById("configPanel");
+      const btn = document.getElementById("toggleConfigBtn");
+      panel.style.display = visible ? "block" : "none";
+      btn.innerText = visible ? "Hide settings" : "Show settings";
+    }
+
+    function updateConfigBadge() {
+      const badge = document.getElementById("configBadge");
+      if (!badge) return;
+      if (hasSavedConfig()) {
+        badge.innerText = "Settings saved ✅";
+        badge.style.color = "green";
+      } else {
+        badge.innerText = "Settings missing ⚠️";
+        badge.style.color = "#b45309";
+      }
+    }
+
+    // Scan UI
+    function setScanUI(text, statusText, color) {
+      const resultEl = document.getElementById("result");
+      const statusEl = document.getElementById("scanStatus");
+      resultEl.innerText = text;
+      resultEl.style.color = color || "#666";
+      statusEl.innerText = statusText || "";
+      statusEl.style.color = color || "#666";
+    }
+
+    // ISBN-13 (EAN-13) checksum
+    function isValidEan13(ean13) {
+      const s = digitsOnly(ean13);
+      if (s.length !== 13) return false;
+      let sum = 0;
+      for (let i = 0; i < 12; i++) {
+        const d = parseInt(s[i], 10);
+        sum += (i % 2 === 0) ? d : d * 3;
+      }
+      const check = (10 - (sum % 10)) % 10;
+      return check === parseInt(s[12], 10);
+    }
+
+    function looksLikeIsbn13(isbn13) {
+      const s = digitsOnly(isbn13);
+      return s.length === 13 && (s.startsWith("978") || s.startsWith("979"));
+    }
+
+    // ISBN-10 checksum (mod 11)
+    function isValidIsbn10(isbn10Raw) {
+      const s = digitsOrXOnly(isbn10Raw);
+      if (s.length !== 10) return false;
+      let sum = 0;
+      for (let i = 0; i < 10; i++) {
+        const ch = s[i];
+        const val = (ch === "X") ? 10 : parseInt(ch, 10);
+        if (Number.isNaN(val)) return false;
+        sum += val * (10 - i);
+      }
+      return (sum % 11) === 0;
+    }
+
+    function normalizeScannedIsbn(decodedText) {
+      const raw = String(decodedText || "").trim();
+      const d = digitsOnly(raw);
+      const ok13 = (d.length === 13) && looksLikeIsbn13(d) && isValidEan13(d);
+      const ok10 = isValidIsbn10(raw);
+
+      if (ok13) return { ok: true, isbn: d, kind: "ISBN-13" };
+      if (ok10) return { ok: true, isbn: digitsOrXOnly(raw), kind: "ISBN-10" };
+
+      if (d.length === 13 && isValidEan13(d) && !looksLikeIsbn13(d)) {
+        return { ok: false, isbn: d, reason: "EAN-13 but not a book ISBN" };
+      }
+      return { ok: false, isbn: d || raw, reason: "Invalid / unreadable" };
+    }
+
+    // Cover fallback
+    function imageLoads(url) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = url;
+      });
+    }
+
+    function coverUrlByIsbn(isbn, size="L") {
+      return `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-${size}.jpg?default=false`;
+    }
+
+    function coverUrlById(id, size="L") {
+      return `https://covers.openlibrary.org/b/id/${encodeURIComponent(id)}-${size}.jpg?default=false`;
+    }
+
+    function isbn13ToIsbn10(isbn13) {
+      const s = String(isbn13 || "").replace(/\D/g, "");
+      if (s.length !== 13 || !s.startsWith("978")) return "";
+      const core = s.substring(3, 12);
+      let sum = 0;
+      for (let i=0;i<9;i++) sum += (10-i) * parseInt(core[i],10);
+      const r = sum % 11;
+      const check = (11 - r) % 11;
+      return core + (check === 10 ? "X" : String(check));
+    }
+
+    async function searchCoverFallback(title, author) {
+      const q = encodeURIComponent(`${title || ""} ${author || ""}`.trim());
+      if (!q) return "";
+      const url = `https://openlibrary.org/search.json?q=${q}&limit=8`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      if (!data || !data.docs || !data.docs.length) return "";
+
+      for (const d of data.docs) {
+        if (d.cover_i) {
+          const u = coverUrlById(d.cover_i);
+          if (await imageLoads(u)) return u;
+        }
+      }
+      for (const d of data.docs) {
+        if (Array.isArray(d.isbn) && d.isbn.length) {
+          for (const i of d.isbn.slice(0,12)) {
+            const u = coverUrlByIsbn(i);
+            if (await imageLoads(u)) return u;
+          }
+        }
+      }
+      return "";
+    }
+
+    async function resolveBestCoverUrl(isbn13, title, author) {
+      const cacheKey = `cover_${isbn13}`;
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached !== null) return cached;
+
+      const candidates = [];
+      if (isbn13) candidates.push(coverUrlByIsbn(isbn13));
+      const isbn10 = isbn13ToIsbn10(isbn13);
+      if (isbn10) candidates.push(coverUrlByIsbn(isbn10));
+
+      for (const u of candidates) {
+        if (await imageLoads(u)) { sessionStorage.setItem(cacheKey, u); return u; }
+      }
+      const u2 = await searchCoverFallback(title, author);
+      sessionStorage.setItem(cacheKey, u2 || "");
+      return u2 || "";
+    }
+
+    function resetBookUI() {
+      const coverImg = document.getElementById("book-cover");
+      coverImg.style.display = "none";
+      coverImg.src = "";
+      setText("book-title","---");
+      setText("book-author","---");
+      setText("book-language","---");
+      setText("book-source","---");
+      setText("book-cover-url","---");
+    }
+
+    function showCover(url) {
+      const coverImg = document.getElementById("book-cover");
+      coverImg.style.display = "none";
+      coverImg.src = "";
+      if (!url) return;
+      coverImg.onload = () => { coverImg.style.display = "block"; };
+      coverImg.onerror = () => { coverImg.style.display = "none"; };
+      coverImg.src = url;
+    }
+
+    async function fetchBookDetails(isbn, gbRetryCount = 0) {
+      resetBookUI();
+      currentBook = null;
+
+      const olUrl = "https://openlibrary.org/api/books"
+        + "?bibkeys=ISBN:" + encodeURIComponent(isbn)
+        + "&format=json&jscmd=data";
+
+      try {
+        const olResp = await fetch(olUrl);
+        const olData = await olResp.json();
+        const key = "ISBN:" + isbn;
+
+        if (olData && olData[key]) {
+          const b = olData[key];
+          const title = b.title || "";
+          const author = (b.authors && b.authors.length) ? b.authors.map(a => a.name).join(", ") : "";
+
+          let langCode = "";
+          if (b.languages && b.languages.length && b.languages[0].key) {
+            langCode = b.languages[0].key.split("/").pop() || "";
+          }
+          const langName = langToName(langCode);
+
+          setText("book-title", title || "—");
+          setText("book-author", author || "—");
+          setText("book-language", langName || "Unknown");
+          setText("book-source", "Open Library");
+
+          const bestCover = await resolveBestCoverUrl(isbn, title, author);
+          setText("book-cover-url", bestCover || "(no cover found)");
+          showCover(bestCover);
+
+          currentBook = { isbn13: isbn, title, author, coverUrl: bestCover || "", language: langName || "" };
+          return;
+        }
+
+        setText("book-source", "Google Books (fallback)");
+        const gbResp = await fetch(`/api/google-books?isbn=${encodeURIComponent(isbn)}`);
+        const gb = await gbResp.json();
+
+        if (gb && gb.temporary) {
+          setText("book-title", "Google Books temporarily unavailable");
+          setText("book-author", "");
+          setText("book-language", "");
+          setText("book-cover-url", "(auto retry in progress)");
+          showCover("");
+
+          const maxAutoRetry = 2;
+          const waitMs = 90000;
+
+          if (gbRetryCount < maxAutoRetry) {
+            alert((gb.message || "Google Books temporarily unavailable.")
+              + `\n\nAuto-retry in ${Math.round(waitMs/1000)} seconds...`);
+            setTimeout(() => fetchBookDetails(isbn, gbRetryCount + 1), waitMs);
+          } else {
+            alert((gb.message || "Google Books temporarily unavailable.")
+              + "\n\nAuto-retry already attempted. Try again later or enter manually.");
+          }
+          return;
+        }
+
+        if (gb && gb.found) {
+          const title = gb.title || "";
+          const author = gb.author || "";
+          const langName = langToName(gb.language || "");
+
+          setText("book-title", title || "—");
+          setText("book-author", author || "—");
+          setText("book-language", langName || "Unknown");
+          setText("book-source", "Google Books");
+
+          let coverUrl = sanitizeUrl(gb.coverUrl || "");
+          if (!coverUrl) coverUrl = await resolveBestCoverUrl(isbn, title, author);
+
+          setText("book-cover-url", coverUrl || "(no cover found)");
+          showCover(coverUrl);
+
+          currentBook = { isbn13: isbn, title, author, coverUrl: coverUrl || "", language: langName || "" };
+          return;
+        }
+
+        alert("Not found in Open Library nor Google Books.");
+        setText("book-source", "None");
+      } catch (err) {
+        console.error(err);
+        alert("Network error during lookup.");
+      }
+    }
+
+    // Improved scanner setup
+    async function onScanSuccess(decodedText, decodedResult) {
+      const r = normalizeScannedIsbn(decodedText);
+
+      if (r.ok) {
+        setScanUI(r.isbn, `✅ Perfect scan (${r.kind})`, "green");
+        try { if (navigator.vibrate) navigator.vibrate(60); } catch (_) {}
+
+        if (!alreadyScanned) {
+          alreadyScanned = true;
+          try { await html5QrcodeScanner.clear(); } catch (_) {}
+          fetchBookDetails(r.isbn);
+        }
+      } else {
+        setScanUI(r.isbn || "---", `❌ ${r.reason} → use manual entry`, "red");
+      }
+    }
+
+    function onScanError(_) {}
+
+    const html5QrcodeScanner = new Html5QrcodeScanner(
+      "reader",
+      {
+        fps: 12,
+        qrbox: { width: 280, height: 160 },
+        rememberLastUsedCamera: true,
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8
+        ],
+        videoConstraints: {
+          facingMode: { ideal: "environment" },
+          width:  { min: 640, ideal: 1920, max: 1920 },
+          height: { min: 480, ideal: 1080, max: 1080 }
+        }
+      },
+      false
+    );
+
+    setScanUI("---", "Scanning…", "#666");
+    html5QrcodeScanner.render(onScanSuccess, onScanError);
+
+    // Load config + auto-hide + badge
+    window.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("notionKey").value = localStorage.getItem("NOTION_API_KEY") || "";
+      document.getElementById("dbId").value = localStorage.getItem("NOTION_DB_ID") || "";
+      document.getElementById("location").value = localStorage.getItem("LAST_LOCATION") || "Milano";
+      setConfigPanelVisible(!hasSavedConfig());
+      updateConfigBadge();
+    });
+
+    document.getElementById("toggleConfigBtn").addEventListener("click", () => {
+      const panel = document.getElementById("configPanel");
+      const isVisible = panel.style.display !== "none";
+      setConfigPanelVisible(!isVisible);
+    });
+
+    document.getElementById("saveConfigBtn").addEventListener("click", () => {
+      const key = document.getElementById("notionKey").value.trim();
+      const db = document.getElementById("dbId").value.trim();
+      if (!key || !db) {
+        document.getElementById("configStatus").innerText = "⚠️ Missing data";
+        updateConfigBadge();
+        return;
+      }
+      localStorage.setItem("NOTION_API_KEY", key);
+      localStorage.setItem("NOTION_DB_ID", db);
+      document.getElementById("configStatus").innerText = "✅ Saved";
+      updateConfigBadge();
+      setTimeout(() => setConfigPanelVisible(false), 50);
+    });
+
+    document.getElementById("clearConfigBtn").addEventListener("click", () => {
+      localStorage.removeItem("NOTION_API_KEY");
+      localStorage.removeItem("NOTION_DB_ID");
+      document.getElementById("notionKey").value = "";
+      document.getElementById("dbId").value = "";
+      document.getElementById("configStatus").innerText = "🧹 Reset";
+      updateConfigBadge();
+      setTimeout(() => setConfigPanelVisible(true), 50);
+    });
+
+    document.getElementById("location").addEventListener("change", (e) => {
+      localStorage.setItem("LAST_LOCATION", e.target.value);
+    });
+
+    document.getElementById("manualIsbnBtn").addEventListener("click", async () => {
+      const status = document.getElementById("manualIsbnStatus");
+      const raw = document.getElementById("manualIsbn").value;
+      const cleaned = digitsOrXOnly(raw);
+      status.innerText = "";
+
+      const ok13 = (digitsOnly(cleaned).length === 13) && isValidEan13(cleaned) && looksLikeIsbn13(cleaned);
+      const ok10 = isValidIsbn10(cleaned);
+
+      if (!ok13 && !ok10) {
+        status.innerText = "⚠️ Enter a valid ISBN-10 or ISBN-13";
+        return;
+      }
+
+      const finalIsbn = ok13 ? digitsOnly(cleaned) : cleaned;
+
+      setText("result", finalIsbn);
+      setScanUI(finalIsbn, "Manual lookup", "#666");
+
+      status.innerText = "🔎 Searching...";
+      await fetchBookDetails(finalIsbn);
+      status.innerText = "✅ Done";
+    });
+
+    document.getElementById("saveBtn").addEventListener("click", async () => {
+      const statusEl = document.getElementById("saveStatus");
+
+      if (!currentBook || !currentBook.isbn13) {
+        statusEl.innerText = "Scan or lookup an ISBN first.";
+        return;
+      }
+
+      const notionToken = localStorage.getItem("NOTION_API_KEY");
+      const databaseId = localStorage.getItem("NOTION_DB_ID");
+
+      if (!notionToken || !databaseId) {
+        statusEl.innerText = "Missing config: set Notion API Key + Database ID.";
+        setConfigPanelVisible(true);
+        return;
+      }
+
+      const location = document.getElementById("location").value;
+      statusEl.innerText = "Saving...";
+
+      try {
+        const resp = await fetch("/api/save-book", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            notionToken,
+            databaseId,
+            book: { ...currentBook, location }
+          })
+        });
+
+        const json = await resp.json();
+        const detailsMsg =
+          (json && json.details && json.details.message) ? json.details.message :
+          (json && json.details && json.details.raw) ? json.details.raw : "";
+
+        if (json.status === "duplicate") statusEl.innerText = "⚠️ Already exists (duplicate).";
+        else if (json.status === "created") statusEl.innerText = "✅ Saved to Notion!";
+        else statusEl.innerText = "❌ " + (json.error || "Error") + (detailsMsg ? (": " + detailsMsg) : "");
+      } catch (e) {
+        console.error(e);
+        statusEl.innerText = "❌ Network/API error";
+      }
+    });
+
+    document.getElementById("restartBtn").addEventListener("click", () => location.reload());
+  </script>
+</body>
+</html>
