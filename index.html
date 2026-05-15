@@ -18,8 +18,9 @@
   <!-- SCANNER -->
   <h2 style="margin: 18px 0 10px 0;">📷 Scan ISBN</h2>
   
-  <div id="reader" style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden; background:#000;">
-    <video id="zxingVideo" autoplay playsinline muted style="width: 100%; height: auto; display:block;"></video>
+  <!-- ZXing richiede un elemento video per il rendering dei fotogrammi -->
+  <div style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden; position: relative; background: #000;">
+    <video id="video" style="width: 100%; height: auto; display: block;"></video>
   </div>
   
   <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
@@ -33,6 +34,63 @@
     </div>
   </div>
 
+<!-- Includi la libreria ZXing ufficiale da CDN -->
+<script src="https://unpkg.com"></script>
+
+<script>
+  window.addEventListener('load', () => {
+    const codeReader = new ZXing.BrowserMultiFormatReader();
+    const videoElement = document.getElementById('video');
+    const resultElement = document.getElementById('result');
+    const statusElement = document.getElementById('scanStatus');
+
+    statusElement.textContent = "Inizializzazione...";
+
+    // Recupera i dispositivi video disponibili
+    codeReader.listVideoInputDevices()
+      .then((videoInputDevices) => {
+        // Seleziona preferibilmente la telecamera posteriore (back camera)
+        let selectedDeviceId = videoInputDevices[0].deviceId;
+        
+        for (const device of videoInputDevices) {
+          if (device.label.toLowerCase().includes('back') || device.label.toLowerCase().includes('posteriore')) {
+            selectedDeviceId = device.deviceId;
+            break;
+          }
+        }
+
+        statusElement.textContent = "Fotocamera attiva";
+        statusElement.style.color = "green";
+
+        // Avvia la scansione continua
+        codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
+          if (result) {
+            // Codice rilevato con successo
+            resultElement.textContent = result.text;
+            resultElement.style.color = "#000";
+            statusElement.textContent = "Scansionato!";
+            statusElement.style.color = "blue";
+            
+            // Opzionale: fai vibrare il telefono al rilevamento
+            if (navigator.vibrate) navigator.vibrate(200);
+          }
+          
+          if (err && !(err instanceof ZXing.NotFoundException)) {
+            // Mostra errori critici escludendo il normale "non trovato" ad ogni frame
+            console.error(err);
+            statusElement.textContent = "Errore di lettura";
+            statusElement.style.color = "red";
+          }
+        });
+      })
+      .catch((err) => {
+        console.error(err);
+        statusElement.textContent = "Permesso negato o errore fotocamera";
+        statusElement.style.color = "red";
+      });
+  });
+</script>
+  
   <!-- MANUAL ISBN -->
   <hr style="margin: 18px 0;">
   <h2 style="margin: 0 0 10px 0;">⌨️ Manual ISBN (if scanner fails)</h2>
