@@ -4,7 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Library Scanner</title>
-  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <!-- ZXing (core + browser layer) -->
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script src="https://unpkg.com/@zxing/browser@latest"></script>
 </head>
 
 <body style="font-family: Arial, sans-serif; max-width: 820px; margin: 20px auto; padding: 0 12px;">
@@ -15,25 +18,24 @@
     <br><small>Fallback: Open Library → Google Books (auto-retry if temporarily unavailable)</small>
   </p>
 
-<!-- SCANNER -->
-<h2 style="margin: 18px 0 10px 0;">📷 Scan ISBN</h2>
+  <!-- SCANNER -->
+  <h2 style="margin: 18px 0 10px 0;">📷 Scan ISBN</h2>
 
-<div id="reader" style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden; background:#000;">
-  <video id="zxingVideo" autoplay playsinline muted style="width: 100%; height: auto; display:block;"></video>
-</div>
-
-<div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
-  <div><strong>Detected ISBN:</strong></div>
-  <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
-    <div id="result" style="font-size: 18px; font-weight: bold; color: #666;">---</div>
-    <div id="scanStatus" style="font-size: 14px; font-weight: bold; color:#666;"></div>
+  <div id="reader" style="width: 340px; margin: 10px 0; border-radius: 8px; overflow: hidden; background:#000;">
+    <video id="zxingVideo" autoplay playsinline muted style="width: 100%; height: auto; display:block;"></video>
   </div>
-  <div style="margin-top:6px; font-size: 12px; color:#666;">
-    Tip: hold the phone a bit farther away; keep the barcode inside the box.
-  </div>
-</div>
 
-  
+  <div style="margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px;">
+    <div><strong>Detected ISBN:</strong></div>
+    <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
+      <div id="result" style="font-size: 18px; font-weight: bold; color: #666;">---</div>
+      <div id="scanStatus" style="font-size: 14px; font-weight: bold; color:#666;"></div>
+    </div>
+    <div style="margin-top:6px; font-size: 12px; color:#666;">
+      Tip: hold the phone a bit farther away; keep the barcode inside the box.
+    </div>
+  </div>
+
   <!-- MANUAL ISBN -->
   <hr style="margin: 18px 0;">
   <h2 style="margin: 0 0 10px 0;">⌨️ Manual ISBN (if scanner fails)</h2>
@@ -107,6 +109,11 @@
   <script>
     let alreadyScanned = false;
     let currentBook = null;
+
+    // ZXing runtime
+    let zxingReader = null;
+    let zxingControls = null;
+    let lastRedTs = 0;
 
     function setText(id, value) { document.getElementById(id).innerText = value; }
     function digitsOnly(s) { return String(s || "").replace(/\D/g, ""); }
@@ -389,55 +396,73 @@
       }
     }
 
-    // Improved scanner setup
-    async function onScanSuccess(decodedText, decodedResult) {
-      const r = normalizeScannedIsbn(decodedText);
-
-      if (r.ok) {
-        setScanUI(r.isbn, `✅ Perfect scan (${r.kind})`, "green");
-        try { if (navigator.vibrate) navigator.vibrate(60); } catch (_) {}
-
-        if (!alreadyScanned) {
-          alreadyScanned = true;
-          try { await html5QrcodeScanner.clear(); } catch (_) {}
-          fetchBookDetails(r.isbn);
-        }
-      } else {
-        setScanUI(r.isbn || "---", `❌ ${r.reason} → use manual entry`, "red");
-      }
+    async function stopZxing() {
+      try { if (zxingControls) zxingControls.stop(); } catch (_) {}
+      zxingControls = null;
+      try { if (zxingReader) zxingReader.reset(); } catch (_) {}
+      zxingReader = null;
     }
 
-    function onScanError(_) {}
+    async function startZxing() {
+      const videoEl = document.getElementById("zxingVideo");
 
-    const html5QrcodeScanner = new Html5QrcodeScanner(
-      "reader",
-      {
-        fps: 12,
-        qrbox: { width: 280, height: 160 },
-        rememberLastUsedCamera: true,
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8
-        ],
-        videoConstraints: {
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.EAN_13,
+        ZXing.BarcodeFormat.EAN_8
+      ]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+      zxingReader = new ZXingBrowser.BrowserMultiFormatReader(hints);
+
+      const constraints = {
+        audio: false,
+        video: {
           facingMode: { ideal: "environment" },
-          width:  { min: 640, ideal: 1920, max: 1920 },
+          width: { min: 640, ideal: 1920, max: 1920 },
           height: { min: 480, ideal: 1080, max: 1080 }
         }
-      },
-      false
-    );
+      };
 
-    setScanUI("---", "Scanning…", "#666");
-    html5QrcodeScanner.render(onScanSuccess, onScanError);
+      setScanUI("---", "Scanning…", "#666");
 
-    // Load config + auto-hide + badge
+      zxingControls = await zxingReader.decodeFromConstraints(constraints, videoEl, (result, err, controls) => {
+        if (result) {
+          const rawText = result.getText();
+          const parsed = normalizeScannedIsbn(rawText);
+
+          if (parsed.ok) {
+            setScanUI(parsed.isbn, `✅ Perfect scan (${parsed.kind})`, "green");
+            try { if (navigator.vibrate) navigator.vibrate(60); } catch (_) {}
+
+            if (!alreadyScanned) {
+              alreadyScanned = true;
+              try { controls.stop(); } catch (_) {}
+              fetchBookDetails(parsed.isbn);
+            }
+          } else {
+            const now = Date.now();
+            if (now - lastRedTs > 500) {
+              lastRedTs = now;
+              setScanUI(parsed.isbn || "---", `❌ ${parsed.reason} → use manual entry`, "red");
+            }
+          }
+        }
+      });
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       document.getElementById("notionKey").value = localStorage.getItem("NOTION_API_KEY") || "";
       document.getElementById("dbId").value = localStorage.getItem("NOTION_DB_ID") || "";
       document.getElementById("location").value = localStorage.getItem("LAST_LOCATION") || "Milano";
+
       setConfigPanelVisible(!hasSavedConfig());
       updateConfigBadge();
+
+      startZxing().catch((e) => {
+        console.error(e);
+        setScanUI("---", "Camera error (permission / constraints)", "red");
+      });
     });
 
     document.getElementById("toggleConfigBtn").addEventListener("click", () => {
@@ -481,7 +506,8 @@
       const cleaned = digitsOrXOnly(raw);
       status.innerText = "";
 
-      const ok13 = (digitsOnly(cleaned).length === 13) && isValidEan13(cleaned) && looksLikeIsbn13(cleaned);
+      const d = digitsOnly(cleaned);
+      const ok13 = (d.length === 13) && isValidEan13(d) && looksLikeIsbn13(d);
       const ok10 = isValidIsbn10(cleaned);
 
       if (!ok13 && !ok10) {
@@ -489,7 +515,7 @@
         return;
       }
 
-      const finalIsbn = ok13 ? digitsOnly(cleaned) : cleaned;
+      const finalIsbn = ok13 ? d : cleaned;
 
       setText("result", finalIsbn);
       setScanUI(finalIsbn, "Manual lookup", "#666");
@@ -544,7 +570,16 @@
       }
     });
 
-    document.getElementById("restartBtn").addEventListener("click", () => location.reload());
+    document.getElementById("restartBtn").addEventListener("click", async () => {
+      alreadyScanned = false;
+      currentBook = null;
+      setScanUI("---", "Scanning…", "#666");
+      await stopZxing();
+      await startZxing().catch((e) => {
+        console.error(e);
+        setScanUI("---", "Camera error (permission / constraints)", "red");
+      });
+    });
   </script>
 </body>
 </html>
