@@ -451,6 +451,28 @@
       });
     }
 
+    // ✅ CLEAN SLATE on New Scan
+    function clearForNewScan() {
+      alreadyScanned = false;
+      currentBook = null;
+
+      // Clear save feedback
+      const saveStatusEl = document.getElementById("saveStatus");
+      if (saveStatusEl) saveStatusEl.innerText = "";
+
+      // Clear manual UI
+      const manual = document.getElementById("manualIsbn");
+      if (manual) manual.value = "";
+      const manualStatus = document.getElementById("manualIsbnStatus");
+      if (manualStatus) manualStatus.innerText = "";
+
+      // Clear details + cover
+      resetBookUI();
+
+      // Reset scan UI
+      setScanUI("---", "Scanning…", "#666");
+    }
+
     window.addEventListener("DOMContentLoaded", () => {
       document.getElementById("notionKey").value = localStorage.getItem("NOTION_API_KEY") || "";
       document.getElementById("dbId").value = localStorage.getItem("NOTION_DB_ID") || "";
@@ -571,9 +593,10 @@
     });
 
     document.getElementById("restartBtn").addEventListener("click", async () => {
-      alreadyScanned = false;
-      currentBook = null;
-      setScanUI("---", "Scanning…", "#666");
+      // FULL clean slate
+      clearForNewScan();
+
+      // Restart scanner
       await stopZxing();
       await startZxing().catch((e) => {
         console.error(e);
